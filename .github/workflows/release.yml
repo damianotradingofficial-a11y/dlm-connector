@@ -35,6 +35,21 @@ jobs:
 
       - run: npm install
 
+      # config.json contiene solo url + anon key pubblici di Supabase (identici a
+      # NEXT_PUBLIC_SUPABASE_URL/NEXT_PUBLIC_SUPABASE_ANON_KEY già esposti nel sito
+      # dlmtrading.com lato client) — nessun segreto, sicuro da avere qui nel repo
+      # pubblico del Connector. Senza questo file l'app non può fare login (Gate
+      # lato client, non lato server: la anon key da sola non autorizza nulla).
+      - name: Configura Supabase (chiave pubblica anon)
+        shell: bash
+        run: |
+          cat > config.json << 'EOF'
+          {
+            "supabaseUrl": "https://tcahggugraovtnuimukb.supabase.co",
+            "supabaseAnonKey": "sb_publishable_VbgzmQkPH8rgyQhkHuwFJA_fVCC5qNU"
+          }
+          EOF
+
       - run: npm run ${{ matrix.script }} -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
