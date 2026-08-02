@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+<title>DLM Auto Connector</title>
+<style>
+  /*
+    Fase 1 Hardening/UX Premium: stessi valori esatti del brand DLM (letti da
+    app/globals.css, damiano-app-3) — solo i VALORI sono cambiati, i NOMI
+    delle variabili restano quelli originali per non dover riscrivere tutto
+    il resto di questo foglio di stile (vista tecnica avanzata, priorità
+    minore rispetto al wizard cliente in wizard.html).
+  */
+  :root {
+    color-scheme: dark;
+    --bg: #0B0E14;
+    --card: #12161F;
+    --border: #232935;
+    --testo: #E7EAF0;
+    --muted: #8A93A6;
+    --ok: #3FB68B;
+    --warn: #D9A441;
+    --err: #D9614F;
+    --info: #5B8DEF;
+    --accento: #5B8DEF;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--testo);
+    padding: 24px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sottotitolo { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  input {
+    width: 100%;
+    padding: 9px 10px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #0d1520;
+    color: var(--testo);
+    font-size: 14px;
+  }
+  button {
+    background: var(--accento);
+    color: #1a1a1a;
+    border: none;
+    padding: 9px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button.secondario {
+    background: transparent;
+    color: var(--testo);
+    border: 1px solid var(--border);
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .riga-azioni { display: flex; gap: 10px; align-items: center; }
+  .errore { color: var(--err); font-size: 13px; margin-top: 4px; }
+  .stato-login { font-size: 13px; color: var(--muted); }
+  .voce {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .voce:last-child { border-bottom: none; }
+  .pallino { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .pallino.ok { background: var(--ok); }
+  .pallino.warn { background: var(--warn); }
+  .pallino.err { background: var(--err); }
+  .pallino.info { background: var(--info); }
+  .voce-testo { flex: 1; }
+  .voce-etichetta { font-size: 14px; font-weight: 600; }
+  .voce-dettaglio { font-size: 12px; color: var(--muted); }
+  .problema {
+    border-left: 3px solid var(--warn);
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    background: #1a1206;
+    border-radius: 0 6px 6px 0;
+  }
+  .problema-titolo { font-weight: 600; font-size: 13px; margin-bottom: 3px; }
+  .problema-descrizione { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .problema-soluzione { font-size: 12px; color: var(--testo); }
+  .nascosto { display: none; }
+  .titolo-sezione { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+  <div style="display:flex;justify-content:space-between;align-items:baseline;">
+    <h1>DLM Auto Connector — Vista diagnostica avanzata</h1>
+    <a href="wizard.html" style="font-size:12px;color:var(--muted);text-decoration:none;">← Torna alla configurazione guidata</a>
+  </div>
+  <div class="sottotitolo">Dati tecnici grezzi, per supporto/diagnosi — i clienti usano la configurazione guidata (wizard.html)</div>
+
+  <div class="card" id="cardLogin">
+    <div class="titolo-sezione">Accedi</div>
+    <label for="email">Email DLM</label>
+    <input id="email" type="email" placeholder="tuo@indirizzo.it" />
+    <label for="password">Password</label>
+    <input id="password" type="password" placeholder="••••••••" />
+    <div class="riga-azioni">
+      <button id="btnLogin">Accedi</button>
+      <span id="statoLogin" class="stato-login"></span>
+    </div>
+    <div id="erroreLogin" class="errore nascosto"></div>
+  </div>
+
+  <div class="card nascosto" id="cardLoggato">
+    <div class="riga-azioni" style="justify-content: space-between;">
+      <span class="stato-login">Connesso come <strong id="emailLoggata"></strong></span>
+      <button class="secondario" id="btnLogout">Esci</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="riga-azioni">
+      <button id="btnAnalizza">Analizza</button>
+      <span id="statoAnalisi" class="stato-login"></span>
+    </div>
+  </div>
+
+  <div class="card nascosto" id="cardRisultato">
+    <div class="titolo-sezione">Stato</div>
+    <div id="voci"></div>
+  </div>
+
+  <div class="card nascosto" id="cardProblemi">
+    <div class="titolo-sezione">Problemi rilevati e soluzioni consigliate</div>
+    <div id="problemi"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

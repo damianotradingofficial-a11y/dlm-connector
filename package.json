@@ -1,0 +1,92 @@
+{
+  "name": "dlm-connector",
+  "version": "0.4.0",
+  "private": true,
+  "description": "DLM Auto Connector — Blocco 1 (rilevamento + diagnostica), Blocco 2 (installazione assistita del Bridge, con backup/verifica/version manager), Blocco 3 (wizard cliente a 5 step), base Blocco 4 (AI Troubleshooting deterministico), Hardening Fase 1-4 (branding UX, wizard cliente definitivo, installer electron-builder, AI Troubleshooting contestuale + Version Management del Connector). Progetto separato da damiano-app-3: non tocca il motore DLM, il Trading/Risk/Execution Engine né il Bridge EA canonico.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test:install": "node test-install-bridge.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.45.0"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/damianotradingofficial-a11y/dlm-connector.git"
+  },
+  "build": {
+    "appId": "com.dlmcapitalpartners.connector",
+    "productName": "DLM Connector",
+    "copyright": "Copyright © 2026 DLM Capital Partners Ltd",
+    "publish": {
+      "provider": "github"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "resources/**/*"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "resources/**/*",
+      "version-manifest.json",
+      "package.json",
+      "!test-install-bridge.js",
+      "!config.example.json",
+      "!README.md"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DLM Connector",
+      "runAfterFinish": true,
+      "artifactName": "DLM Connector Setup.exe"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.finance",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "artifactName": "DLM Connector.dmg",
+      "title": "DLM Connector"
+    }
+  }
+}

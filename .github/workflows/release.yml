@@ -1,0 +1,36 @@
+name: Build & Release DLM Connector
+
+# Build automatica DMG (macOS) + EXE (Windows) ad ogni tag "v*" (es. v0.4.0),
+# pubblicati direttamente sulla GitHub Release corrispondente. Nessun segreto
+# da configurare a mano: electron-builder usa il GITHUB_TOKEN fornito
+# automaticamente da GitHub Actions per creare/aggiornare la release e
+# caricare gli asset. Nessuna modifica al Bridge EA o al Trading Core: questo
+# workflow builda solo il wizard Electron già esistente in questo repo.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            script: dist:mac
+          - os: windows-latest
+            script: dist:win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+
+      - run: npm run ${{ matrix.script }} -- --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

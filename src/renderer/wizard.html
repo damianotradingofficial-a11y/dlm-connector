@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self';" />
+<title>DLM Auto Connector — Configurazione guidata</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /*
+    Palette e font IDENTICI a quelli del sito DLM (letti da app/globals.css,
+    damiano-app-3) — Fase 1 dell'Hardening/UX Premium richiesto da Damiano.
+    Se il sito cambia palette, questi valori vanno riallineati a mano (nessun
+    meccanismo automatico di condivisione tra i due progetti, per design:
+    restano separati).
+  */
+  :root {
+    color-scheme: dark;
+    --bg: #0B0E14;
+    --panel: #12161F;
+    --panel-alt: #171C27;
+    --border: #232935;
+    --text: #E7EAF0;
+    --dim: #8A93A6;
+    --accent: #5B8DEF;
+    --bull: #3FB68B;
+    --bear: #D9614F;
+    --wait: #D9A441;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Inter', -apple-system, "Segoe UI", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  .intestazione { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: var(--panel-alt); border: 1px solid var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px; color: var(--accent);
+  }
+  .brand .nome { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 18px; }
+  .link-secondario { font-size: 12px; color: var(--dim); text-decoration: none; }
+  .link-secondario:hover { color: var(--text); }
+  .sottotitolo { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; color: var(--dim); margin-bottom: 4px; }
+  input {
+    width: 100%;
+    padding: 9px 10px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-alt);
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 9px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  button.secondario { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .riga-azioni { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .errore { color: var(--bear); font-size: 13px; margin-top: 4px; }
+  .nascosto { display: none; }
+
+  /* Barra progresso 5 step */
+  .barra-step { display: flex; gap: 6px; margin-bottom: 20px; }
+  .pallino-step {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+  }
+  .pallino-step.completato { background: var(--bull); }
+  .pallino-step.in_corso, .pallino-step.azione_richiesta { background: var(--wait); }
+  .pallino-step.non_disponibile { background: var(--border); }
+
+  .elenco-step { display: flex; flex-direction: column; gap: 2px; margin-bottom: 18px; }
+  .voce-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--dim);
+  }
+  .voce-step:last-child { border-bottom: none; }
+  .voce-step.corrente { color: var(--text); font-weight: 600; }
+  .icona-step { width: 20px; text-align: center; }
+
+  .titolo-sezione { font-family: 'Space Grotesk', sans-serif; font-size: 13px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 10px; }
+  .installazione-riga { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .installazione-riga:last-child { border-bottom: none; }
+  .mono { font-family: 'IBM Plex Mono', ui-monospace, Menlo, monospace; font-size: 13px; }
+  .chiave-box { display: flex; gap: 8px; align-items: center; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+  .checklist { list-style: none; padding: 0; margin: 0 0 10px; }
+  .checklist li { padding: 6px 0; font-size: 13px; color: var(--dim); }
+  .checklist li.ok { color: var(--bull); }
+  .assistente-box {
+    border-left: 3px solid var(--accent);
+    background: var(--panel-alt);
+    padding: 12px 14px;
+    border-radius: 0 8px 8px 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .assistente-box.bloccante { border-left-color: var(--bear); }
+  .versioni-riga { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); padding: 3px 0; }
+  .badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: var(--border); color: var(--dim); }
+  .badge.ok { background: rgba(63,182,139,0.15); color: var(--bull); }
+  .badge.warn { background: rgba(217,164,65,0.15); color: var(--wait); }
+
+  /* Step 1 — Schermata di benvenuto (Fase 2) */
+  .schermata-benvenuto { text-align: center; padding: 48px 24px; }
+  .schermata-benvenuto .mark-grande {
+    width: 56px; height: 56px; border-radius: 14px; margin: 0 auto 20px;
+    background: var(--panel-alt); border: 1px solid var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 20px; color: var(--accent);
+  }
+  .schermata-benvenuto h1 {
+    font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 600; margin: 0 0 12px;
+  }
+  .schermata-benvenuto p { color: var(--dim); font-size: 14px; line-height: 1.6; max-width: 420px; margin: 0 auto 28px; }
+  .schermata-benvenuto button { padding: 12px 28px; font-size: 14px; }
+
+  /* Step 4 — slot immagini/tutorial (predisposizione, senza asset definitivi) */
+  .slot-immagine {
+    display: flex; align-items: center; gap: 12px;
+    border: 1px dashed var(--border); border-radius: 8px;
+    padding: 12px; margin-bottom: 10px; background: var(--panel-alt);
+  }
+  .slot-immagine .segnaposto {
+    flex-shrink: 0; width: 64px; height: 44px; border-radius: 6px;
+    border: 1px dashed var(--border); color: var(--dim);
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+  }
+  .slot-immagine .slot-testo { flex: 1; font-size: 12px; color: var(--dim); }
+  .slot-immagine button { flex-shrink: 0; }
+
+  /* Step 5 — banner premium "account pronto" */
+  .banner-pronto {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(63,182,139,0.12); border: 1px solid var(--bull);
+    border-radius: 8px; padding: 14px 16px; margin-top: 14px;
+    font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 15px; color: var(--bull);
+  }
+
+  /* Fase 4 — nota AI Troubleshooting contestuale, dentro la card dello step
+     interessato (non più solo nel riepilogo generale in cima). */
+  .nota-assistente {
+    border-left: 3px solid var(--wait);
+    background: var(--panel-alt);
+    padding: 10px 12px;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+  }
+  .nota-assistente.bloccante { border-left-color: var(--bear); }
+
+  /* Fase 4 — notifica "nuova versione Connector disponibile" (solo notifica,
+     nessun download/installazione automatica). */
+  .banner-aggiornamento {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(217,164,65,0.12); border: 1px solid var(--wait);
+    border-radius: 8px; padding: 10px 12px; margin-top: 10px;
+    font-size: 13px; color: var(--text);
+  }
+</style>
+</head>
+<body>
+  <div class="intestazione">
+    <div class="brand">
+      <div class="mark">DLM</div>
+      <div class="nome">DLM Auto Connector</div>
+    </div>
+    <a class="link-secondario" href="index.html">Vista diagnostica avanzata →</a>
+  </div>
+  <div class="sottotitolo">Colleghiamo il tuo MetaTrader 5 a DLM, passo dopo passo.</div>
+
+  <!-- Step 1 — Schermata di benvenuto (Fase 2). Non fa parte delle 5 fasi di
+       wizardState.js: è un gate puramente di UI, mostrato prima di tutto il
+       resto, che si limita a rivelare il contenuto del wizard al click. -->
+  <div class="card schermata-benvenuto" id="cardBenvenuto">
+    <div class="mark-grande">DLM</div>
+    <h1 id="titoloBenvenuto"></h1>
+    <p id="testoBenvenuto"></p>
+    <button id="btnInizia"></button>
+  </div>
+
+  <div id="contenutoWizard" class="nascosto">
+    <div class="barra-step" id="barraStep"></div>
+    <div class="elenco-step" id="elencoStep"></div>
+
+    <div class="card nascosto" id="cardAssistente">
+      <div class="assistente-box" id="assistenteBox"></div>
+    </div>
+
+    <!-- Login -->
+    <div class="card" id="cardLogin">
+    <div class="titolo-sezione">Accedi</div>
+    <label for="email">Email DLM</label>
+    <input id="email" type="email" placeholder="tuo@indirizzo.it" />
+    <label for="password">Password</label>
+    <input id="password" type="password" placeholder="••••••••" />
+    <div class="riga-azioni">
+      <button id="btnLogin">Accedi</button>
+      <span id="statoLogin" style="font-size:13px;color:var(--dim);"></span>
+    </div>
+    <div id="erroreLogin" class="errore nascosto"></div>
+  </div>
+
+  <!-- Step 2: rilevamento MT5 -->
+  <div class="card" id="cardStep2">
+    <div class="titolo-sezione" id="titoloStep2">MetaTrader 5</div>
+    <div class="nota-assistente nascosto" id="notaAssistenteStep2"></div>
+    <div id="listaInstallazioni"></div>
+  </div>
+
+  <!-- Step 3: installazione Bridge -->
+  <div class="card" id="cardStep3">
+    <div class="titolo-sezione" id="titoloStep3">Collegamento DLM</div>
+    <div class="nota-assistente nascosto" id="notaAssistenteStep3"></div>
+    <div id="dettaglioStep3" style="font-size:13px;color:var(--dim);margin-bottom:10px;"></div>
+    <div class="riga-azioni">
+      <button id="btnInstallaBridge">Installa il collegamento</button>
+      <span id="statoInstallazione" style="font-size:13px;color:var(--dim);"></span>
+    </div>
+  </div>
+
+  <!-- Step 4: configurazione guidata -->
+  <div class="card" id="cardStep4">
+    <div class="titolo-sezione" id="titoloStep4">Attivazione</div>
+    <div class="nota-assistente nascosto" id="notaAssistenteStep4"></div>
+    <div id="dettaglioStep4" style="font-size:13px;color:var(--dim);margin-bottom:10px;"></div>
+    <ul class="checklist" id="checklistStep4"></ul>
+    <div class="riga-azioni" style="margin-bottom:12px;">
+      <button id="btnApriMt5">Apri MetaTrader 5</button>
+      <span id="statoApriMt5" style="font-size:13px;color:var(--dim);"></span>
+    </div>
+    <p style="font-size:13px;color:var(--dim);margin:0 0 10px;">
+      Attiva "Trading Algoritmico" (icona play nella barra strumenti di MT5) e, se richiesto, autorizza l'indirizzo dell'API DLM in
+      Strumenti → Opzioni → Expert Advisor → "Consenti WebRequest per le seguenti URL". Questi due passaggi si fanno direttamente in MT5,
+      ma la connessione qui sotto si conferma da sola non appena sono attivi.
+    </p>
+
+    <!-- Slot immagini/tutorial (predisposizione Fase 2): NESSUNA immagine
+         definitiva ancora — solo segnaposto e pulsanti disabilitati, in
+         attesa degli screenshot reali di MT5 (verranno aggiunti durante il
+         test reale, come da piano Hardening) e del collegamento futuro alla
+         DLM Academy. -->
+    <div class="slot-immagine">
+      <div class="segnaposto">🖼️</div>
+      <div class="slot-testo">Come attivare "Trading Algoritmico" in MT5 — screenshot in arrivo.</div>
+      <button class="secondario" disabled>Guarda il tutorial</button>
+    </div>
+    <div class="slot-immagine">
+      <div class="segnaposto">🖼️</div>
+      <div class="slot-testo">Come autorizzare l'indirizzo DLM in "WebRequest" — screenshot in arrivo.</div>
+      <button class="secondario" disabled>Guarda il tutorial</button>
+    </div>
+
+    <div class="riga-azioni" style="margin-bottom:8px;">
+      <button id="btnGeneraChiave" class="secondario">Genera la mia chiave</button>
+      <span id="statoChiave" style="font-size:13px;color:var(--dim);"></span>
+    </div>
+    <div class="chiave-box nascosto" id="chiaveBox">
+      <span class="mono" id="chiaveTesto"></span>
+      <button class="secondario" id="btnCopiaChiave">Copia</button>
+    </div>
+  </div>
+
+    <!-- Step 5: verifica finale — schermata premium "DLM Connector" -->
+    <div class="card" id="cardStep5">
+      <div class="titolo-sezione">DLM Connector</div>
+      <div class="nota-assistente nascosto" id="notaAssistenteStep5"></div>
+      <ul class="checklist" id="checklistStep5"></ul>
+      <div class="banner-pronto nascosto" id="bannerPronto">
+        <span>✅</span>
+        <span id="testoBannerPronto"></span>
+      </div>
+    </div>
+
+    <!-- Version Manager -->
+    <div class="card nascosto" id="cardVersioni">
+      <div class="titolo-sezione">Versioni</div>
+      <div id="dettaglioVersioni"></div>
+      <div class="banner-aggiornamento nascosto" id="bannerAggiornamentoConnector">
+        <span>ℹ️</span>
+        <span id="testoAggiornamentoConnector"></span>
+      </div>
+    </div>
+
+    <div class="riga-azioni">
+      <button class="secondario" id="btnAggiorna">Aggiorna stato</button>
+      <span id="statoGenerale" style="font-size:12px;color:var(--dim);"></span>
+    </div>
+  </div>
+
+  <script src="copyCliente.js"></script>
+  <script src="wizard.js"></script>
+</body>
+</html>
