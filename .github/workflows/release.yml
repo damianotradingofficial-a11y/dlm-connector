@@ -16,16 +16,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            script: dist:mac
-          - os: windows-latest
-            script: dist:win
-    runs-on: ${{ matrix.os }}
+  build-mac:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +42,38 @@ jobs:
           }
           EOF
 
-      - run: npm run ${{ matrix.script }} -- --publish always
+      - run: npm run dist:mac -- --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-win:
+    # Serializzato dopo build-mac (needs), non in parallelo: electron-builder
+    # crea la GitHub Release al primo publish che parte — se mac e windows
+    # partono insieme possono creare due release separate per lo stesso tag
+    # (visto succedere con v0.4.2, corretto qui). Con needs, build-win parte
+    # solo a build-mac già completato, quindi trova la release già creata da
+    # mac e ci carica dentro i propri asset invece di duplicarla.
+    needs: build-mac
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+
+      - name: Configura Supabase (chiave pubblica anon)
+        shell: bash
+        run: |
+          cat > config.json << 'EOF'
+          {
+            "supabaseUrl": "https://tcahggugraovtnuimukb.supabase.co",
+            "supabaseAnonKey": "sb_publishable_VbgzmQkPH8rgyQhkHuwFJA_fVCC5qNU"
+          }
+          EOF
+
+      - run: npm run dist:win -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

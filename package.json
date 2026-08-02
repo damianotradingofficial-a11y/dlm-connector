@@ -1,6 +1,6 @@
 {
   "name": "dlm-connector",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "description": "DLM Auto Connector — Blocco 1 (rilevamento + diagnostica), Blocco 2 (installazione assistita del Bridge, con backup/verifica/version manager), Blocco 3 (wizard cliente a 5 step), base Blocco 4 (AI Troubleshooting deterministico), Hardening Fase 1-4 (branding UX, wizard cliente definitivo, installer electron-builder, AI Troubleshooting contestuale + Version Management del Connector). Progetto separato da damiano-app-3: non tocca il motore DLM, il Trading/Risk/Execution Engine né il Bridge EA canonico.",
   "main": "main.js",
