@@ -1,4 +1,6 @@
 {
   "_comment": "Manifest locale bundlato con il Connector, letto da versionManager.js quando nessun endpoint remoto (DLM_CONNECTOR_UPDATE_CHECK_URL) è configurato. Aggiornare manualmente il campo 'connector' a ogni release pubblicata, allineato a package.json/version. Finche' resta uguale alla versione corrente, il Connector non mostra alcuna notifica di aggiornamento.",
-  "connector": "0.4.0"
+  "connector": "0.5.0",
+  "bridgeEa": "1.4.8",
+  "apiBaseUrl": "https://www.dlmtrading.com"
 }

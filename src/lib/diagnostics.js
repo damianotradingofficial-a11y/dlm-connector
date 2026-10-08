@@ -33,7 +33,7 @@ function suggerimentoPerErrore(messaggio) {
   if (!messaggio) return null;
   const testo = messaggio.toLowerCase();
   if (testo.includes("webrequest")) {
-    return 'Aggiungi l\'indirizzo dell\'API DLM alla whitelist: in MT5 vai su Strumenti → Opzioni → Expert Advisor → "Consenti WebRequest per le seguenti URL".';
+    return 'Aggiungi questo indirizzo agli indirizzi consentiti: https://www.dlmtrading.com — in MT5 vai su Strumenti → Opzioni → Expert Advisor → "Consenti WebRequest per le seguenti URL".';
   }
   if (testo.includes("trading non consentito") || testo.includes("autotrading") || testo.includes("algo")) {
     return 'Attiva "Trading Algoritmico" nella barra strumenti di MT5 (icona play in alto) e verifica che il tuo conto non sia in sola lettura.';

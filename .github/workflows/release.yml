@@ -1,6 +1,13 @@
 name: Build & Release DLM Connector
 
-# Build automatica DMG (macOS) + EXE (Windows) ad ogni tag "v*" (es. v0.4.0),
+# Dalla 0.5.0: build automatica del solo EXE (Windows) ad ogni tag "v*",
+# pubblicato come VERSIONE DI PROVA (prerelease): GitHub non la considera
+# "latest", quindi non diventa da sola quella distribuita ai clienti. Una
+# versione va ai clienti solo dopo l'approvazione, togliendo a mano il segno
+# di prova e puntando i link di produzione a quel tag preciso (mai "latest").
+# Prima di costruire girano i controlli di rilascio (npm test); dopo, vengono
+# pubblicate le impronte SHA-256.
+# Storia: fino alla 0.4.3 costruiva DMG (macOS) + EXE (Windows),
 # pubblicati direttamente sulla GitHub Release corrispondente. Nessun segreto
 # da configurare a mano: electron-builder usa il GITHUB_TOKEN fornito
 # automaticamente da GitHub Actions per creare/aggiornare la release e
@@ -11,12 +18,26 @@ on:
   push:
     tags:
       - "v*"
+    # Costruzione di prova SENZA pubblicare nulla: ogni invio a un ramo
+    # "release/…" costruisce il pacchetto Windows e lo lascia allegato
+    # all'esecuzione del flusso per 7 giorni. Nessun tag, nessuna release,
+    # "latest" invariato.
+    branches:
+      - "release/**"
+  # Stessa costruzione di prova, avviata a mano (disponibile quando questo
+  # file sarà anche sul ramo principale).
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build-mac:
+    # CONNECTOR MAC = NOT YET SUPPORTED (08/10/2026): su macOS il Connector non
+    # installa ancora il Bridge, quindi il pacchetto Mac non viene costruito né
+    # offerto. Il lavoro resta qui, pronto per quando sarà supportato
+    # (serviranno firma Apple e notarizzazione).
+    if: ${{ false }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,13 +68,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-win:
-    # Serializzato dopo build-mac (needs), non in parallelo: electron-builder
-    # crea la GitHub Release al primo publish che parte — se mac e windows
-    # partono insieme possono creare due release separate per lo stesso tag
-    # (visto succedere con v0.4.2, corretto qui). Con needs, build-win parte
-    # solo a build-mac già completato, quindi trova la release già creata da
-    # mac e ci carica dentro i propri asset invece di duplicarla.
-    needs: build-mac
+    # Dalla 0.5.0 è l'unico pacchetto costruito (vedi build-mac sopra).
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +89,37 @@ jobs:
           }
           EOF
 
-      - run: npm run dist:win -- --publish always
+      - name: Controlli di rilascio (EA, dominio, numero conto, chiave nei registri, versione)
+        run: npm test
+
+      - name: Costruisci e pubblica come versione di prova (solo da tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run dist:win -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Costruisci senza pubblicare (avvio a mano)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: npx electron-builder --win --publish never
+
+      - name: Impronte SHA-256 dei file costruiti
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File | Where-Object { $_.Name -match '\.(exe|blockmap|yml)$' } | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Out-File -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      - name: Pubblica le impronte nella versione di prova (solo da tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Allega i file all'esecuzione (avvio a mano)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlm-connector-windows-prova
+          path: |
+            dist/*.exe
+            SHA256SUMS.txt
+          retention-days: 7
