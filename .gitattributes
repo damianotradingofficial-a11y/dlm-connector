@@ -1,0 +1,9 @@
+# L'EA incluso deve arrivare nel pacchetto byte per byte identico al file
+# approvato (i controlli di rilascio ne verificano l'impronta SHA-256): nessuna
+# conversione dei fine riga, su nessun sistema.
+resources/*.mq5 -text
+# Tutto il resto: fine riga LF ovunque, anche quando si costruisce su Windows.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
