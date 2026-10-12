@@ -1,6 +1,6 @@
 # DLM Connector 0.6.0
 
-Stato: **in sviluppo — non pubblicata, non compilata e non provata su MetaTrader. Non distribuire.**
+Stato: **in sviluppo — non pubblicata. EA compilata (0 errori, 0 avvisi) e provata su MetaTrader 5 demo; Connector non ancora provato su Windows. Non distribuire.**
 
 ## Contenuto
 - **DLM Bridge EA 1.5.0** al posto della 1.4.8: protocollo di esecuzione 2.
@@ -35,4 +35,4 @@ La conferma del server riduce a pochi istanti il tempo in cui uno stop di emerge
 
 ## Impronta SHA-256
 EA incluso (`resources/DLM_Bridge_EA.mq5`):
-`cbf331b4f49150a5da611742adadbd013441adfdafcaa6dc157f2214e36d5632`
+`761651ed5669cdea16a2f259119e30ddab9e5f8a5aecdc72b1373d6cde5bfa21`

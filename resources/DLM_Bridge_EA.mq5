@@ -545,6 +545,7 @@ bool RilevaErroreCritico(string &descrizioneOut)
 #define GIORNI_STORIA_DOPPIONI      7
 #define SECONDI_TRA_RITRASMISSIONI  10
 #define MASSIMO_RITRASMISSIONI_PER_GIRO 3
+#define SECONDI_ORDINE_RICEVUTO_FERMO 30
 #define PREFISSO_RIFERIMENTO        "DLM:"
 
 // Stati del registro (valore della variabile globale "DLMS_...").
@@ -895,7 +896,25 @@ void RecuperaOrdiniInDubbio(bool soloAvvio)
    for(int i = 0; i < quanti; i++)
    {
       string id = ids[i];
+      // Il momento dell'ultimo uso va letto PRIMA dello stato: leggere lo
+      // stato conta come "uso" e lo porterebbe ad adesso.
+      datetime ultimoUso = GlobalVariableTime(ChiaveRegistro("DLMS_", id));
       double stato = RegistroLeggi(id);
+      // All'avvio: un ordine rimasto "ricevuto" non e' mai arrivato a MT5
+      // ("invio in corso" viene scritto su disco prima di chiamare MT5). E'
+      // un dato certo: lo si dice al server, cosi' l'ordine non resta in
+      // esito incerto ad aspettare un amministratore. Solo se e' fermo da
+      // almeno 30 secondi: un'altra copia dell'EA sullo stesso terminale
+      // potrebbe averlo ricevuto adesso e stare per inviarlo.
+      if(soloAvvio && stato == REG_RICEVUTO)
+      {
+         if(ultimoUso > 0 && TimeLocal() - ultimoUso >= SECONDI_ORDINE_RICEVUTO_FERMO)
+         {
+            LogErrore(StringFormat("Dopo il riavvio: l'ordine %s era stato ricevuto ma mai inviato a MT5. Lo riporto come non eseguito.", id));
+            InviaOrderResult(id, "ERROR", "", 0, 0, "Apertura non eseguita: l'EA si e' fermata prima di inviare l'ordine a MT5.");
+         }
+         continue;
+      }
       if(stato != REG_INVIO_IN_CORSO && stato != REG_INCERTO) continue;
       ulong ticket = 0; double volume = 0.0, prezzo = 0.0;
       if(EsecuzioneGiaPresenteSuMt5(RiferimentoOrdine(id), ticket, volume, prezzo))

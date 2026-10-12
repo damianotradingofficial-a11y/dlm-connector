@@ -16,8 +16,8 @@ const CONNECTOR_ATTESO = "0.6.0";
 const EA_ATTESO = "1.5.0";
 const EA_PROPERTY_ATTESA = "1.50";
 const SERVER_ATTESO = "https://www.dlmtrading.com";
-// Impronta SHA-256 dell'EA 1.5.0 del ramo di sviluppo (protocollo di esecuzione 2). NON ancora compilato né provato su MetaTrader.
-const EA_SHA256_ATTESO = "cbf331b4f49150a5da611742adadbd013441adfdafcaa6dc157f2214e36d5632";
+// Impronta SHA-256 dell'EA 1.5.0 del ramo di sviluppo (protocollo di esecuzione 2). Compilato con MetaEditor (0 errori, 0 avvisi) e provato su MetaTrader 5 con conto demo il 12/10/2026.
+const EA_SHA256_ATTESO = "761651ed5669cdea16a2f259119e30ddab9e5f8a5aecdc72b1373d6cde5bfa21";
 
 let ok = 0, ko = 0;
 const verifica = (nome, cond, dettaglio = "") => { if (cond) { ok++; console.log(`  ✓ ${nome}`); } else { ko++; console.log(`  ✗ ${nome} ${dettaglio}`); } };
