@@ -46,6 +46,7 @@
       "src/**/*",
       "resources/**/*",
       "version-manifest.json",
+      "config.json",
       "package.json",
       "!test-install-bridge.js",
       "!config.example.json",

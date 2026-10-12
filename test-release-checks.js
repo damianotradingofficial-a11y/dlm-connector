@@ -81,6 +81,14 @@ verifica("dopo un aggiornamento il Connector dice al cliente di riaprire MetaTra
 console.log("6 — istruzioni al cliente");
 verifica("il wizard nomina l'indirizzo esatto da autorizzare in MetaTrader", leggi("src/renderer/wizard.html").includes(SERVER_ATTESO) && leggi("src/lib/diagnostics.js").includes(SERVER_ATTESO));
 
+console.log("6b — collegamento al server dentro il pacchetto");
+// Trovato nel collaudo del 12/10/2026: il file con l'indirizzo del server veniva
+// creato durante la costruzione ma non rientrava nell'elenco dei file da
+// impacchettare, quindi il Connector installato non poteva fare l'accesso.
+verifica("il file di configurazione del server è nell'elenco dei file impacchettati", (pkg.build?.files || []).includes("config.json"));
+verifica("il flusso di costruzione crea quel file prima di impacchettare", /cat > config\.json/.test(leggi(".github/workflows/release.yml")) && leggi(".github/workflows/release.yml").indexOf("cat > config.json", leggi(".github/workflows/release.yml").indexOf("build-win")) < leggi(".github/workflows/release.yml").lastIndexOf("npm run dist:win"));
+verifica("il file resta fuori dal controllo di versione e contiene solo indirizzo e chiave pubblica", /^config\.json$/m.test(leggi(".gitignore")) && (!fs.existsSync(path.join(__dirname, "config.json")) || (() => { const c = JSON.parse(leggi("config.json")); return Object.keys(c).sort().join() === "supabaseAnonKey,supabaseUrl" && !/service_role|secret/i.test(JSON.stringify(c)) && !/^eyJ/.test(c.supabaseAnonKey) || /^sb_publishable_/.test(c.supabaseAnonKey); })()));
+
 console.log("7 — pubblicazione");
 const flusso = leggi(".github/workflows/release.yml");
 verifica("la pubblicazione automatica crea solo una versione di prova (prerelease)", pkg.build?.publish?.provider === "github" && pkg.build.publish.releaseType === "prerelease");
