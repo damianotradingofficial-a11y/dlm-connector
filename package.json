@@ -11,7 +11,7 @@
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
     "pack": "electron-builder --dir",
-    "test": "node test-release-checks.js"
+    "test": "node test-release-checks.js && node test-upgrade-bridge.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.45.0"
