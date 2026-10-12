@@ -232,6 +232,13 @@ function generaReportInstallazione({
     azioniRichieste.push(
       `Trovata una versione precedente del Bridge: salvata come backup (${[backupMq5, backupEx5].filter(Boolean).map((p) => path.basename(p)).join(", ")}), non cancellata.`
     );
+    // Dalla 0.6.0 (EA 1.5.0): dopo un aggiornamento il cliente deve vedere la
+    // versione nuova sul grafico. Finché MetaTrader usa ancora quella
+    // precedente, il server può non consegnare le nuove aperture sui conti
+    // reali; chiusure e modifiche dello stop arrivano comunque.
+    azioniRichieste.push(
+      "Aggiornamento del collegamento: chiudi e riapri MetaTrader, poi controlla che il collegamento sia attivo sul grafico. Le posizioni già aperte non vengono toccate."
+    );
   }
 
   return {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CONTROLLI DI RILASCIO — DLM Connector 0.5.0 (08/10/2026).
+// CONTROLLI DI RILASCIO — DLM Connector 0.6.0 (12/10/2026).
 // Solo moduli Node builtin: si esegue con `npm test` su qualunque sistema,
 // senza `npm install`. Bloccano la costruzione del pacchetto se:
 //   - l'EA incluso non è la versione attesa, o non è il file approvato;
@@ -12,12 +12,12 @@ const path = require("path");
 const crypto = require("crypto");
 
 // Valori attesi di QUESTA versione. Cambiano solo con una nuova versione approvata.
-const CONNECTOR_ATTESO = "0.5.0";
-const EA_ATTESO = "1.4.8";
-const EA_PROPERTY_ATTESA = "1.48";
+const CONNECTOR_ATTESO = "0.6.0";
+const EA_ATTESO = "1.5.0";
+const EA_PROPERTY_ATTESA = "1.50";
 const SERVER_ATTESO = "https://www.dlmtrading.com";
-// Impronta SHA-256 dell'EA 1.4.8 approvato (patch di sicurezza della 1.4.7 verificata).
-const EA_SHA256_ATTESO = "665ff3c3d2ba713fddef01dafb0f0369f5b409933f26a96867f339dfe54296bb";
+// Impronta SHA-256 dell'EA 1.5.0 del ramo di sviluppo (protocollo di esecuzione 2). NON ancora compilato né provato su MetaTrader.
+const EA_SHA256_ATTESO = "cbf331b4f49150a5da611742adadbd013441adfdafcaa6dc157f2214e36d5632";
 
 let ok = 0, ko = 0;
 const verifica = (nome, cond, dettaglio = "") => { if (cond) { ok++; console.log(`  ✓ ${nome}`); } else { ko++; console.log(`  ✗ ${nome} ${dettaglio}`); } };
@@ -69,6 +69,15 @@ const sorgentiConnector = testuali(NEL_PACCHETTO).filter((f) => f.endsWith(".js"
 const logChiaveConnector = sorgentiConnector.filter((f) => /console\.(log|info|warn|error)\([^)]*(connection_?reference|connectionReference)\b/i.test(leggi(f)));
 verifica("nemmeno il Connector scrive la chiave nei propri registri", logChiaveConnector.length === 0, logChiaveConnector.join(", "));
 
+console.log("5b — protocollo di esecuzione 2 (EA 1.5.0)");
+const senzaCommenti = ea.split("\n").filter((r) => !r.trimStart().startsWith("//")).join("\n");
+const corpoApri = ea.slice(ea.indexOf("void EseguiApri("), ea.indexOf("\n}\n", ea.indexOf("void EseguiApri(")));
+verifica("l'EA dichiara il protocollo 2 e chiede l'autorizzazione con un tempo massimo di 3 secondi", /#define PROTOCOLLO_ESECUZIONE\s+2\b/.test(ea) && /#define TIMEOUT_AUTORIZZAZIONE_MS\s+3000\b/.test(ea) && ea.includes("/api/mt5/execution-authorization"));
+verifica("un solo punto apre posizioni, dopo controllo dei doppioni, autorizzazione e registro", (senzaCommenti.match(/trade\.Buy\(/g) || []).length === 1 && (senzaCommenti.match(/trade\.Sell\(/g) || []).length === 1 && corpoApri.indexOf("AperturaGiaGestita(") > 0 && corpoApri.indexOf("AperturaGiaGestita(") < corpoApri.indexOf("ChiediAutorizzazioneEsecuzione(") && corpoApri.indexOf("ChiediAutorizzazioneEsecuzione(") < corpoApri.indexOf("RegistroPrenotaInvio(") && corpoApri.indexOf("RegistroPrenotaInvio(") < corpoApri.indexOf("trade.Buy("));
+verifica("chiusure e modifiche dello stop non chiedono autorizzazione", (senzaCommenti.match(/ChiediAutorizzazioneEsecuzione\(/g) || []).length === 2);
+verifica("la chiave di collegamento non viaggia mai nell'indirizzo della richiesta di autorizzazione", !/execution-authorization\?/.test(ea));
+verifica("dopo un aggiornamento il Connector dice al cliente di riaprire MetaTrader", leggi("src/lib/installBridge.js").includes("chiudi e riapri MetaTrader"));
+
 console.log("6 — istruzioni al cliente");
 verifica("il wizard nomina l'indirizzo esatto da autorizzare in MetaTrader", leggi("src/renderer/wizard.html").includes(SERVER_ATTESO) && leggi("src/lib/diagnostics.js").includes(SERVER_ATTESO));
 
@@ -79,7 +88,7 @@ verifica("il flusso esegue questi controlli prima di costruire", /npm test/.test
 verifica("il flusso pubblica le impronte SHA-256", /SHA256SUMS\.txt/.test(flusso) && /Get-FileHash|sha256sum|shasum/.test(flusso));
 verifica("Mac non ancora supportato: il flusso non costruisce il pacchetto Mac", /build-mac:[\s\S]*?\n\s+if:\s*\$\{\{\s*false\s*\}\}/.test(flusso) && !/needs:\s*build-mac/.test(flusso));
 verifica("nessun aggiornamento automatico dentro il Connector", !/electron-updater|autoUpdater/.test(sorgentiConnector.map(leggi).join("\n")) && !("electron-updater" in (pkg.dependencies || {})));
-verifica("le istruzioni di rilascio vietano i link 'latest' in produzione", /releases\/download\/v0\.5\.0\//.test(leggi("README.md")) && /non usare .*latest/i.test(leggi("README.md")));
+verifica("le istruzioni di rilascio vietano i link 'latest' in produzione", /releases\/download\/v0\.6\.0\//.test(leggi("README.md")) && /non usare .*latest/i.test(leggi("README.md")));
 
 console.log(`\nRISULTATO: ${ok} superati, ${ko} falliti`);
 process.exit(ko ? 1 : 0);

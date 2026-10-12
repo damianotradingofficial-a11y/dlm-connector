@@ -109,7 +109,7 @@
 //
 #property copyright "DLM Capital Partners Ltd"
 #property link      "https://www.dlmtrading.com"
-#property version    "1.48"
+#property version    "1.50"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -126,7 +126,7 @@ input int    WebRequestTimeoutMs      = 5000;                      // Timeout si
 //------------------------------------------------------------------------
 // COSTANTI
 //------------------------------------------------------------------------
-#define EA_VERSIONE "1.4.8"          // DLM Bridge EA v1.4.8 — identica alla 1.4.7 verificata + patch di sicurezza (08/10/2026): tolto un numero di conto da un commento, la chiave di collegamento non viene piu' scritta nel registro all'avvio. Nessuna modifica funzionale.
+#define EA_VERSIONE "1.5.0"          // DLM Bridge EA v1.5.0 — protocollo di esecuzione 2 (12/10/2026): registro persistente degli ordini, riferimento dell'ordine nel commento della posizione, controllo dei doppioni, autorizzazione del server un istante prima dell'apertura, esiti ritrasmessi fino a conferma, stato con il dettaglio delle posizioni. Base: 1.4.8.
 #define SIMBOLO_UNICO "XAUUSD"       // Simbolo LOGICO/CANONICO — e' quello che il server vede sempre (campo "symbol" dell'heartbeat). Il simbolo REALE del broker viene risolto a runtime in g_simboloBroker, vedi RisolviSimboloBroker().
 #define MAGIC_NUMBER 26073101        // Identifica le posizioni aperte da QUESTO bridge — mai un altro EA/bot sullo stesso conto (vedi nota Magic Number in testa al file)
 
@@ -136,6 +136,7 @@ input int    WebRequestTimeoutMs      = 5000;                      // Timeout si
 CTrade   trade;
 int      g_secondiTrascorsi          = 0;   // contatore interno, incrementato ogni secondo da OnTimer
 int      g_fallimentiWebRequestConsecutivi = 0;
+int      g_ultimoCodiceHttp          = 0;   // v1.5.0: codice dell'ultima risposta (-1 = nessuna risposta)
 bool     g_erroreCriticoGiaRiportato  = false; // evita di spammare lo stesso errore critico a ogni timer
 string   g_simboloBroker             = "";   // simbolo REALE risolto sul broker (es. "XAUUSD.pa") — popolato una sola volta in OnInit da RisolviSimboloBroker()
 bool     g_simboloValido             = false; // false finche' RisolviSimboloBroker() non ha successo — gate esplicito per EseguiApri()
@@ -284,7 +285,7 @@ ulong ParseTicketOpzionale(string valoreStringa)
 // in un header invece che in query string sulle chiamate GET — vedi nota in
 // testa a EseguiCicloPendingOrders(). Parametro con valore di default: le
 // chiamate POST esistenti restano identiche, byte per byte.
-bool EseguiChiamataHttp(string metodo, string url, string corpoJson, string &rispostaOut, string headerExtra = "")
+bool EseguiChiamataHttp(string metodo, string url, string corpoJson, string &rispostaOut, string headerExtra = "", int timeoutMs = 0)
 {
    uchar datiInvio[];
    if(corpoJson != "")
@@ -297,8 +298,10 @@ bool EseguiChiamataHttp(string metodo, string url, string corpoJson, string &ris
       headerRichiesta += headerExtra;
 
    ResetLastError();
-   int codiceHttp = WebRequest(metodo, url, headerRichiesta, WebRequestTimeoutMs, datiInvio, datiRisposta, headerRisposta);
+   // v1.5.0: tempo massimo dedicato per la richiesta di autorizzazione (3 secondi); 0 = quello generale.
+   int codiceHttp = WebRequest(metodo, url, headerRichiesta, (timeoutMs > 0 ? timeoutMs : WebRequestTimeoutMs), datiInvio, datiRisposta, headerRisposta);
 
+   g_ultimoCodiceHttp = codiceHttp;
    if(codiceHttp == -1)
    {
       int erroreMt5 = GetLastError();
@@ -517,6 +520,423 @@ bool RilevaErroreCritico(string &descrizioneOut)
 //+------------------------------------------------------------------+
 //| STATUS / HEARTBEAT — POST /api/mt5/status                        |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| PROTOCOLLO DI ESECUZIONE 2 (v1.5.0, 12/10/2026)                  |
+//+------------------------------------------------------------------+
+// Quattro protezioni, tutte dentro l'EA:
+//  1) REGISTRO PERSISTENTE degli ordini, nelle variabili globali del
+//     terminale (sopravvivono al riavvio di MT5 e del computer; vengono
+//     scritte su disco subito con GlobalVariablesFlush). Per ogni ordine:
+//     stato, e l'eventuale esito ancora da consegnare al server.
+//  2) RIFERIMENTO DELL'ORDINE nel commento della posizione ("DLM:" + 26
+//     cifre dell'identificativo): ogni posizione su MT5 porta con se' il
+//     legame con l'ordine, anche senza server e anche da un altro terminale.
+//  3) CONTROLLO DEI DOPPIONI prima di ogni apertura: registro, posizioni
+//     aperte, storia delle operazioni. In caso di dubbio l'apertura NON
+//     viene ripetuta.
+//  4) AUTORIZZAZIONE del server un istante prima dell'invio a MT5: senza un
+//     si' esplicito entro 3 secondi l'apertura non parte.
+// Chiusure e modifiche dello stop NON chiedono autorizzazione: devono poter
+// partire sempre, anche a operazioni ferme.
+// L'autorizzazione non e' una garanzia assoluta: uno stop attivato dopo il
+// si' e prima che il broker esegua non puo' piu' fermare l'ordine.
+#define PROTOCOLLO_ESECUZIONE       2
+#define TIMEOUT_AUTORIZZAZIONE_MS   3000
+#define GIORNI_STORIA_DOPPIONI      7
+#define SECONDI_TRA_RITRASMISSIONI  10
+#define MASSIMO_RITRASMISSIONI_PER_GIRO 3
+#define PREFISSO_RIFERIMENTO        "DLM:"
+
+// Stati del registro (valore della variabile globale "DLMS_...").
+#define REG_MAI_VISTO       0.0
+#define REG_RICEVUTO        1.0   // ricevuto dal server, non ancora inviato a MT5
+#define REG_INVIO_IN_CORSO  2.0   // scritto PRIMA di chiamare MT5: se resta cosi' dopo un riavvio, l'esito e' in dubbio
+#define REG_ESEGUITO        3.0
+#define REG_NON_ESEGUITO    4.0
+#define REG_INCERTO         5.0   // non si sa se MT5 abbia eseguito: mai ripetere
+
+// Esiti da consegnare (valore della variabile globale "DLMR_...").
+#define ESITO_FILLED        1.0
+#define ESITO_ERROR         2.0
+#define ESITO_DA_RICONCILIARE 3.0
+#define ESITO_PARTIAL       4.0
+#define ESITO_CLOSED        5.0
+
+// "DLM:" + prime 26 cifre dell'identificativo senza trattini (30 caratteri:
+// il commento di MT5 ne ammette 31). Stringa vuota se l'identificativo non
+// ha la forma attesa.
+string RiferimentoOrdine(string executionOrderId)
+{
+   string pulito = executionOrderId;
+   StringReplace(pulito, "-", "");
+   StringToLower(pulito);
+   if(StringLen(pulito) != 32) return "";
+   if(EsadecimaleInNumero(StringSubstr(pulito, 0, 15)) < 0 || EsadecimaleInNumero(StringSubstr(pulito, 15, 15)) < 0 || EsadecimaleInNumero(StringSubstr(pulito, 30, 2)) < 0) return "";
+   return PREFISSO_RIFERIMENTO + StringSubstr(pulito, 0, 26);
+}
+
+// Legge un numero esadecimale (StringToInteger di MQL5 legge solo decimali).
+long EsadecimaleInNumero(string esa)
+{
+   long valore = 0;
+   for(int i = 0; i < StringLen(esa); i++)
+   {
+      ushort c = StringGetCharacter(esa, i);
+      int cifra;
+      if(c >= '0' && c <= '9') cifra = c - '0';
+      else if(c >= 'a' && c <= 'f') cifra = c - 'a' + 10;
+      else return -1;
+      valore = valore * 16 + cifra;
+   }
+   return valore;
+}
+
+// Nome della variabile globale per questo ordine su QUESTO conto. Il numero
+// del conto e' nel nome: due conti sullo stesso terminale non si mescolano.
+string ChiaveRegistro(string prefisso, string executionOrderId)
+{
+   string rif = RiferimentoOrdine(executionOrderId);
+   if(rif == "") return "";
+   return prefisso + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + StringSubstr(rif, StringLen(PREFISSO_RIFERIMENTO));
+}
+
+double RegistroLeggi(string executionOrderId)
+{
+   string chiave = ChiaveRegistro("DLMS_", executionOrderId);
+   if(chiave == "" || !GlobalVariableCheck(chiave)) return REG_MAI_VISTO;
+   return GlobalVariableGet(chiave);
+}
+
+// Scrive lo stato e lo salva subito su disco. false = registro non
+// scrivibile: chi chiama NON deve procedere con un'apertura.
+bool RegistroScrivi(string executionOrderId, double stato)
+{
+   string chiave = ChiaveRegistro("DLMS_", executionOrderId);
+   if(chiave == "") return false;
+   if(GlobalVariableSet(chiave, stato) == 0) return false;
+   // Le ultime 6 cifre dell'identificativo, come numero: servono a
+   // ricostruire l'identificativo completo dopo un riavvio (il nome della
+   // variabile ne contiene solo 26 su 32).
+   string pulito = executionOrderId;
+   StringReplace(pulito, "-", "");
+   StringToLower(pulito);
+   GlobalVariableSet(ChiaveRegistro("DLMX_", executionOrderId), (double)EsadecimaleInNumero(StringSubstr(pulito, 26, 6)));
+   GlobalVariablesFlush();
+   return true;
+}
+
+// Da "ricevuto" a "invio in corso" in un colpo solo, e subito su disco.
+// true soltanto per la copia dell'EA che ha fatto davvero il passaggio.
+bool RegistroPrenotaInvio(string executionOrderId)
+{
+   string chiave = ChiaveRegistro("DLMS_", executionOrderId);
+   if(chiave == "") return false;
+   if(!GlobalVariableSetOnCondition(chiave, REG_INVIO_IN_CORSO, REG_RICEVUTO)) return false;
+   GlobalVariablesFlush();
+   return true;
+}
+
+// Ricostruisce l'identificativo completo (con i trattini) dal nome di una
+// variabile del registro. Stringa vuota se non e' ricostruibile.
+string IdentificativoDaChiave(string nomeVariabile, string prefisso)
+{
+   string base = prefisso + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_";
+   if(StringFind(nomeVariabile, base) != 0) return "";
+   string cifre26 = StringSubstr(nomeVariabile, StringLen(base));
+   if(StringLen(cifre26) != 26) return "";
+   string chiaveCoda = "DLMX_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + cifre26;
+   if(!GlobalVariableCheck(chiaveCoda)) return "";
+   string coda = StringFormat("%06x", (int)GlobalVariableGet(chiaveCoda));
+   string tutto = cifre26 + coda;
+   return StringSubstr(tutto, 0, 8) + "-" + StringSubstr(tutto, 8, 4) + "-" + StringSubstr(tutto, 12, 4) + "-" + StringSubstr(tutto, 16, 4) + "-" + StringSubstr(tutto, 20, 12);
+}
+
+// Posizione APERTA su questo conto con questo riferimento nel commento
+// (il broker puo' aggiungere testo in coda: si confronta l'inizio).
+ulong TrovaPosizionePerRiferimento(string rif)
+{
+   if(rif == "") return 0;
+   int totale = PositionsTotal();
+   for(int i = 0; i < totale; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT), rif) == 0) return ticket;
+   }
+   return 0;
+}
+
+// Operazione di INGRESSO nella storia del conto con questo riferimento:
+// copre la posizione gia' chiusa (stop, target, chiusura manuale).
+ulong TrovaNellaStoriaPerRiferimento(string rif, double &volumeOut, double &prezzoOut)
+{
+   volumeOut = 0.0; prezzoOut = 0.0;
+   if(rif == "") return 0;
+   datetime adesso = TimeCurrent();
+   if(!HistorySelect(adesso - GIORNI_STORIA_DOPPIONI * 86400, adesso + 86400)) return 0;
+   for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+   {
+      ulong deal = HistoryDealGetTicket(i);
+      if(deal == 0) continue;
+      if(HistoryDealGetInteger(deal, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      if(StringFind(HistoryDealGetString(deal, DEAL_COMMENT), rif) != 0) continue;
+      volumeOut = HistoryDealGetDouble(deal, DEAL_VOLUME);
+      prezzoOut = HistoryDealGetDouble(deal, DEAL_PRICE);
+      return (ulong)HistoryDealGetInteger(deal, DEAL_POSITION_ID);
+   }
+   return 0;
+}
+
+// Cerca su MT5 una esecuzione gia' avvenuta per questo ordine. true = trovata.
+bool EsecuzioneGiaPresenteSuMt5(string rif, ulong &ticketOut, double &volumeOut, double &prezzoOut)
+{
+   ticketOut = TrovaPosizionePerRiferimento(rif);
+   if(ticketOut > 0)
+   {
+      volumeOut = 0.0; prezzoOut = 0.0;
+      if(PositionSelectByTicket(ticketOut))
+      {
+         volumeOut = PositionGetDouble(POSITION_VOLUME);
+         prezzoOut = PositionGetDouble(POSITION_PRICE_OPEN);
+      }
+      return true;
+   }
+   ticketOut = TrovaNellaStoriaPerRiferimento(rif, volumeOut, prezzoOut);
+   return (ticketOut > 0);
+}
+
+// CONTROLLO DEI DOPPIONI per un'apertura. Ritorna true se l'ordine NON deve
+// essere eseguito (gia' eseguito, gia' visto, o in dubbio): in quel caso ha
+// gia' fatto tutto cio' che serve (riportare l'esito noto, o tacere).
+bool AperturaGiaGestita(string executionOrderId, string rif)
+{
+   ulong ticket = 0; double volume = 0.0, prezzo = 0.0;
+   // 1) MT5 e' la verita': se la posizione o l'operazione esistono, l'ordine
+   //    e' stato eseguito, qualunque cosa dica il registro.
+   if(EsecuzioneGiaPresenteSuMt5(rif, ticket, volume, prezzo))
+   {
+      RegistroScrivi(executionOrderId, REG_ESEGUITO);
+      LogOrdine(StringFormat("APRI %s: gia' eseguito su MT5 (ticket=%I64u). Nessuna seconda apertura: riporto l'esito.", executionOrderId, ticket));
+      InviaOrderResult(executionOrderId, "FILLED", IntegerToString(ticket), volume, prezzo, "");
+      return true;
+   }
+   double stato = RegistroLeggi(executionOrderId);
+   if(stato == REG_MAI_VISTO) return false; // ordine nuovo: si procede
+
+   // 2) Gia' visto ma nessuna traccia su MT5: nel dubbio non si ripete MAI.
+   if(stato == REG_INVIO_IN_CORSO || stato == REG_INCERTO)
+   {
+      // L'invio a MT5 era partito (o stava partendo) e non se ne conosce
+      // l'esito. Non si ripete e non si dichiara "non eseguito": il server
+      // lo tiene in esito incerto finche' non viene chiarito.
+      RegistroScrivi(executionOrderId, REG_INCERTO);
+      LogErrore(StringFormat("APRI %s: gia' ricevuto in precedenza e con esito in dubbio. NON ripetuto.", executionOrderId));
+      return true;
+   }
+   if(stato == REG_ESEGUITO)
+   {
+      LogErrore(StringFormat("APRI %s: il registro lo da' per eseguito ma su MT5 non c'e' traccia negli ultimi %d giorni. NON ripetuto.", executionOrderId, GIORNI_STORIA_DOPPIONI));
+      return true;
+   }
+   // REG_RICEVUTO o REG_NON_ESEGUITO: mai arrivato a MT5. Non si ripete
+   // comunque (il server non rimanda le aperture): si riporta "non eseguito".
+   LogErrore(StringFormat("APRI %s: gia' ricevuto in precedenza e mai inviato a MT5. NON ripetuto.", executionOrderId));
+   InviaOrderResult(executionOrderId, "ERROR", "", 0, 0, "Apertura non eseguita: ordine gia' ricevuto in precedenza, non ripetuto.");
+   return true;
+}
+
+// AUTORIZZAZIONE del server un istante prima dell'invio a MT5.
+// true SOLO con un si' esplicito, arrivato in tempo e con validita' residua.
+bool ChiediAutorizzazioneEsecuzione(string executionOrderId, string &codiceOut)
+{
+   string url = ApiBaseUrl + "/api/mt5/execution-authorization";
+   string header = "X-DLM-Connection-Reference: " + ConnectionReference + "\r\n";
+   string corpo = "{\"execution_order_id\":\"" + executionOrderId + "\"}";
+   string risposta = "";
+   uint inizio = GetTickCount();
+   bool ok = EseguiChiamataHttp("POST", url, corpo, risposta, header, TIMEOUT_AUTORIZZAZIONE_MS);
+   uint durataMs = GetTickCount() - inizio;
+
+   codiceOut = JsonGetString(risposta, "codice");
+   if(!ok)
+   {
+      if(codiceOut == "") codiceOut = "SERVER_NON_RAGGIUNGIBILE";
+      return false;
+   }
+   if(StringFind(risposta, "\"autorizzato\":true") < 0)
+   {
+      if(codiceOut == "") codiceOut = "RISPOSTA_NON_VALIDA";
+      return false;
+   }
+   bool trovata = false;
+   double validitaMs = JsonGetNumber(risposta, "validitaMs", trovata);
+   if(!trovata || validitaMs <= 0.0)
+   {
+      codiceOut = "AUTORIZZAZIONE_SENZA_VALIDITA";
+      return false;
+   }
+   // Il si' vale pochi secondi dal momento in cui il server lo ha dato: se
+   // la risposta ha impiegato piu' della validita' ad arrivare, e' scaduto.
+   if((double)durataMs >= validitaMs || durataMs >= TIMEOUT_AUTORIZZAZIONE_MS)
+   {
+      codiceOut = "AUTORIZZAZIONE_ARRIVATA_TARDI";
+      return false;
+   }
+   return true;
+}
+
+// Stato del registro dopo che un esito e' stato deciso.
+void RegistroAggiornaDaEsito(string executionOrderId, string esito)
+{
+   if(esito == "ERROR")
+   {
+      // Un esito in dubbio non viene mai declassato a "non eseguito".
+      if(RegistroLeggi(executionOrderId) != REG_INCERTO) RegistroScrivi(executionOrderId, REG_NON_ESEGUITO);
+   }
+   else
+      RegistroScrivi(executionOrderId, REG_ESEGUITO);
+}
+
+double CodiceEsito(string esito)
+{
+   if(esito == "FILLED") return ESITO_FILLED;
+   if(esito == "FILLED_PENDING_RECONCILIATION") return ESITO_DA_RICONCILIARE;
+   if(esito == "PARTIAL") return ESITO_PARTIAL;
+   if(esito == "CLOSED") return ESITO_CLOSED;
+   return ESITO_ERROR;
+}
+
+string NomeEsito(double codice)
+{
+   if(codice == ESITO_FILLED) return "FILLED";
+   if(codice == ESITO_DA_RICONCILIARE) return "FILLED_PENDING_RECONCILIATION";
+   if(codice == ESITO_PARTIAL) return "PARTIAL";
+   if(codice == ESITO_CLOSED) return "CLOSED";
+   return "ERROR";
+}
+
+// ESITI AFFIDABILI: l'esito viene scritto nel registro come "da consegnare"
+// PRIMA di essere mandato, e resta li' finche' il server non conferma.
+void EsitoMettiInAttesa(string executionOrderId, string esito, string ticketMt5, double volume, double prezzo)
+{
+   if(ChiaveRegistro("DLMR_", executionOrderId) == "") return;
+   GlobalVariableSet(ChiaveRegistro("DLMR_", executionOrderId), CodiceEsito(esito));
+   GlobalVariableSet(ChiaveRegistro("DLMT_", executionOrderId), (double)StringToInteger(ticketMt5));
+   GlobalVariableSet(ChiaveRegistro("DLMV_", executionOrderId), volume);
+   GlobalVariableSet(ChiaveRegistro("DLMP_", executionOrderId), prezzo);
+   GlobalVariablesFlush();
+}
+
+void EsitoConsegnato(string executionOrderId)
+{
+   string chiave = ChiaveRegistro("DLMR_", executionOrderId);
+   if(chiave == "") return;
+   GlobalVariableDel(chiave);
+   GlobalVariableDel(ChiaveRegistro("DLMT_", executionOrderId));
+   GlobalVariableDel(ChiaveRegistro("DLMV_", executionOrderId));
+   GlobalVariableDel(ChiaveRegistro("DLMP_", executionOrderId));
+   GlobalVariablesFlush();
+}
+
+// Raccoglie gli identificativi degli ordini che hanno una variabile con
+// questo prefisso (prima si raccoglie, poi si lavora: inviare un esito
+// crea e cancella variabili, e l'elenco cambierebbe sotto i piedi).
+int RaccogliOrdiniDelRegistro(string prefisso, string &ids[])
+{
+   ArrayResize(ids, 0);
+   string base = prefisso + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_";
+   int totale = GlobalVariablesTotal();
+   for(int i = 0; i < totale; i++)
+   {
+      string nome = GlobalVariableName(i);
+      if(StringFind(nome, base) != 0) continue;
+      string id = IdentificativoDaChiave(nome, prefisso);
+      if(id == "") continue;
+      int n = ArraySize(ids);
+      ArrayResize(ids, n + 1);
+      ids[n] = id;
+   }
+   return ArraySize(ids);
+}
+
+// Rimanda al server gli esiti non ancora confermati. Non esegue MAI nulla
+// su MT5: rimandare un esito non puo' provocare una seconda esecuzione.
+// Al massimo 3 per giro, per non bloccare chiusure e nuovi ordini.
+void RitrasmettiEsitiInAttesa()
+{
+   string ids[];
+   int quanti = RaccogliOrdiniDelRegistro("DLMR_", ids);
+   int inviati = 0;
+   for(int i = 0; i < quanti && inviati < MASSIMO_RITRASMISSIONI_PER_GIRO; i++)
+   {
+      string id = ids[i];
+      string chiave = ChiaveRegistro("DLMR_", id);
+      if(!GlobalVariableCheck(chiave)) continue;
+      string esito = NomeEsito(GlobalVariableGet(chiave));
+      double ticketNum = GlobalVariableGet(ChiaveRegistro("DLMT_", id));
+      string ticketStr = (ticketNum > 0.0) ? IntegerToString((long)ticketNum) : "";
+      inviati++;
+      InviaOrderResult(id, esito, ticketStr, GlobalVariableGet(ChiaveRegistro("DLMV_", id)), GlobalVariableGet(ChiaveRegistro("DLMP_", id)),
+                       "Esito ritrasmesso dopo un problema di rete.");
+   }
+}
+
+// ORDINI IN DUBBIO (all'avvio e poi periodicamente): gli ordini rimasti
+// "invio in corso" o "in dubbio" (l'EA o il computer si sono fermati mentre
+// l'ordine partiva, oppure MT5 non ha saputo dire com'era andata). Si guarda
+// MT5: se la posizione o l'operazione esistono, si riporta l'esecuzione;
+// altrimenti l'esito resta in dubbio e NON si ripete nulla.
+// soloAvvio = true: e' il primo giro dopo un riavvio, quindi un "invio in
+// corso" e' per forza rimasto a meta' e diventa "in dubbio".
+void RecuperaOrdiniInDubbio(bool soloAvvio)
+{
+   string ids[];
+   int quanti = RaccogliOrdiniDelRegistro("DLMS_", ids);
+   for(int i = 0; i < quanti; i++)
+   {
+      string id = ids[i];
+      double stato = RegistroLeggi(id);
+      if(stato != REG_INVIO_IN_CORSO && stato != REG_INCERTO) continue;
+      ulong ticket = 0; double volume = 0.0, prezzo = 0.0;
+      if(EsecuzioneGiaPresenteSuMt5(RiferimentoOrdine(id), ticket, volume, prezzo))
+      {
+         LogOrdine(StringFormat("Ordine in dubbio %s: risulta eseguito su MT5 (ticket=%I64u). Riporto l'esito.", id, ticket));
+         InviaOrderResult(id, "FILLED", IntegerToString(ticket), volume, prezzo, "");
+      }
+      else if(soloAvvio && stato == REG_INVIO_IN_CORSO)
+      {
+         RegistroScrivi(id, REG_INCERTO);
+         LogErrore(StringFormat("Dopo il riavvio: l'ordine %s era in invio e su MT5 non c'e' traccia. Esito in dubbio: NON viene ripetuto.", id));
+      }
+   }
+}
+
+// Dettaglio delle posizioni aperte per la riconciliazione lato server:
+// numero, simbolo logico, direzione, volume, orario di apertura (UTC) e
+// riferimento dell'ordine letto dal commento.
+string JsonPosizioniDettaglio()
+{
+   string json = "[";
+   bool primo = true;
+   long scartoServerGmt = (long)TimeTradeServer() - (long)TimeGMT();
+   int totale = PositionsTotal();
+   for(int i = 0; i < totale; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != g_simboloBroker) continue;
+      string commento = PositionGetString(POSITION_COMMENT);
+      string rif = (StringFind(commento, PREFISSO_RIFERIMENTO) == 0 && StringLen(commento) >= 30) ? StringSubstr(commento, 0, 30) : "";
+      string direzione = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "long" : "short";
+      long apertaUtc = (long)PositionGetInteger(POSITION_TIME) - scartoServerGmt;
+      if(!primo) json += ",";
+      json += StringFormat("{\"ticket\":\"%I64u\",\"symbol\":\"%s\",\"direzione\":\"%s\",\"volume\":%.2f,\"time_open_utc\":%I64d,\"order_ref\":\"%s\"}",
+                           ticket, SIMBOLO_UNICO, direzione, PositionGetDouble(POSITION_VOLUME), apertaUtc, rif);
+      primo = false;
+   }
+   return json + "]";
+}
+
 void InviaStatus(bool erroreCritico, string descrizioneErrore)
 {
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -561,7 +981,10 @@ void InviaStatus(bool erroreCritico, string descrizioneErrore)
    // solo a simbolo risolto: senza simbolo non si sa quali posizioni
    // guardare, e il server senza questi campi non riconcilia nulla.
    if(g_simboloValido)
-      corpo += ",\"posizioni_aperte\":" + JsonTicketAperti() + ",\"chiusure_recenti\":" + JsonChiusureRecenti();
+      corpo += ",\"posizioni_aperte\":" + JsonTicketAperti() + ",\"chiusure_recenti\":" + JsonChiusureRecenti()
+               // v1.5.0: stesso elenco con simbolo, direzione, volume, orario e riferimento dell'ordine.
+               // Campo in piu': i due qui sopra restano identici, per i server non ancora aggiornati.
+               + ",\"protocollo\":" + IntegerToString(PROTOCOLLO_ESECUZIONE) + ",\"posizioni_dettaglio\":" + JsonPosizioniDettaglio();
 
    if(erroreCritico)
    {
@@ -669,6 +1092,13 @@ string JsonChiusureRecenti()
 //+------------------------------------------------------------------+
 void InviaOrderResult(string executionOrderId, string esito, string ticketMt5, double volumeEseguito, double livelloEseguito, string erroreMessaggio)
 {
+   // v1.5.0 — ESITO AFFIDABILE: prima si aggiorna il registro e si mette
+   // l'esito "in attesa di consegna", poi lo si manda. Se la rete cade resta
+   // in attesa e viene ritrasmesso (RitrasmettiEsitiInAttesa) finche' il
+   // server non conferma. Rimandarlo non esegue nulla su MT5.
+   RegistroAggiornaDaEsito(executionOrderId, esito);
+   EsitoMettiInAttesa(executionOrderId, esito, ticketMt5, volumeEseguito, livelloEseguito);
+
    string corpo = StringFormat(
       "{\"connection_reference\":\"%s\",\"execution_order_id\":\"%s\",\"esito\":\"%s\"",
       ConnectionReference, executionOrderId, esito
@@ -691,11 +1121,19 @@ void InviaOrderResult(string executionOrderId, string esito, string ticketMt5, d
    string url = ApiBaseUrl + "/api/mt5/order-result";
    bool ok = EseguiChiamataHttp("POST", url, corpo, risposta);
 
+   // Consegnato, oppure rifiutato dal server in modo definitivo (richiesta
+   // non valida, ordine di un altro conto, passaggio di stato non ammesso):
+   // in entrambi i casi rimandarlo non serve piu'.
+   bool rifiutoDefinitivo = (!ok && (g_ultimoCodiceHttp == 400 || g_ultimoCodiceHttp == 403 || g_ultimoCodiceHttp == 409));
+   if(ok || rifiutoDefinitivo)
+      EsitoConsegnato(executionOrderId);
+   if(rifiutoDefinitivo)
+      LogErrore(StringFormat("Esito per ordine %s rifiutato dal server in modo definitivo (HTTP %d): non verra' ritrasmesso.", executionOrderId, g_ultimoCodiceHttp));
    if(ok)
       LogTicket(StringFormat("Esito riportato per ordine %s: %s (ticket=%s, volume=%.2f, livello=%.2f)",
                               executionOrderId, esito, ticketMt5, volumeEseguito, livelloEseguito));
    else
-      LogErrore(StringFormat("Impossibile riportare l'esito per ordine %s (esito locale: %s).", executionOrderId, esito));
+      LogErrore(StringFormat("Impossibile riportare l'esito per ordine %s (esito locale: %s). Resta in attesa: verra' ritrasmesso.", executionOrderId, esito));
 }
 
 //+------------------------------------------------------------------+
@@ -1004,6 +1442,22 @@ double PrezzoChiusuraReale(ulong ticketPosizione, double prezzoRiportato)
 
 void EseguiApri(string executionOrderId, string direzione, double volumeRichiesto, double stopLoss, double takeProfit)
 {
+   // v1.5.0 — PROTOCOLLO 2, passo 1: riferimento e controllo dei doppioni.
+   string rif = RiferimentoOrdine(executionOrderId);
+   if(rif == "")
+   {
+      LogErrore(StringFormat("Ordine APRI con identificativo non valido ('%s') — non eseguito.", executionOrderId));
+      return; // senza un identificativo valido non si puo' ne' registrare ne' riportare nulla
+   }
+   if(AperturaGiaGestita(executionOrderId, rif))
+      return;
+   if(!RegistroScrivi(executionOrderId, REG_RICEVUTO))
+   {
+      LogErrore(StringFormat("Ordine APRI %s: registro degli ordini non scrivibile — apertura NON eseguita.", executionOrderId));
+      InviaOrderResult(executionOrderId, "ERROR", "", 0, 0, "Apertura non eseguita: registro locale degli ordini non scrivibile.");
+      return;
+   }
+
    if(!g_simboloValido)
    {
       LogErrore(StringFormat("Ordine APRI %s rifiutato: simbolo broker non risolto per il simbolo logico '%s' — nessuna apertura possibile finche' il problema non e' risolto.", executionOrderId, SIMBOLO_UNICO));
@@ -1033,20 +1487,71 @@ void EseguiApri(string executionOrderId, string direzione, double volumeRichiest
    // operativa nuova.
    double tp = (takeProfit > 0.0) ? NormalizeDouble(takeProfit, cifre) : 0.0;
 
-   bool successo;
-   if(direzione == "long")
-      successo = trade.Buy(volumeRichiesto, g_simboloBroker, 0.0, sl, tp);
-   else if(direzione == "short")
-      successo = trade.Sell(volumeRichiesto, g_simboloBroker, 0.0, sl, tp);
-   else
+   if(direzione != "long" && direzione != "short")
    {
       LogErrore(StringFormat("Ordine APRI %s con direzione sconosciuta: '%s'.", executionOrderId, direzione));
       InviaOrderResult(executionOrderId, "ERROR", "", 0, 0, StringFormat("Direzione sconosciuta: %s", direzione));
       return;
    }
 
+   // v1.5.0 — PROTOCOLLO 2, passo 2: autorizzazione del server un istante
+   // prima dell'invio. Senza un si' esplicito e in tempo, NON si apre.
+   string codiceAutorizzazione = "";
+   if(!ChiediAutorizzazioneEsecuzione(executionOrderId, codiceAutorizzazione))
+   {
+      LogErrore(StringFormat("Ordine APRI %s NON eseguito: autorizzazione non ottenuta (%s).", executionOrderId, codiceAutorizzazione));
+      // Se il server dice che l'autorizzazione e' gia' stata usata, o che
+      // l'ordine non e' piu' in corso, l'ordine e' gia' in mano a qualcun
+      // altro (un'altra copia dell'EA) o e' gia' stato chiuso: questa copia
+      // non lo esegue e NON dichiara nulla, per non coprire un esito vero.
+      if(codiceAutorizzazione == "AUTORIZZAZIONE_GIA_USATA" || codiceAutorizzazione == "ORDINE_NON_PIU_IN_CORSO")
+      {
+         RegistroScrivi(executionOrderId, REG_NON_ESEGUITO);
+         return;
+      }
+      InviaOrderResult(executionOrderId, "ERROR", "", 0, 0, StringFormat("Apertura non eseguita: autorizzazione non ottenuta (%s).", codiceAutorizzazione));
+      return;
+   }
+
+   // v1.5.0 — PROTOCOLLO 2, passo 3: "invio in corso" scritto e salvato su
+   // disco PRIMA di chiamare MT5. Se l'EA o il computer si fermano adesso,
+   // al riavvio l'ordine risulta in dubbio e non viene ripetuto.
+   // Il passaggio e' atomico (GlobalVariableSetOnCondition): se due copie
+   // dell'EA sullo stesso terminale avessero lo stesso ordine, una sola
+   // passa da qui; l'altra si ferma senza inviare nulla.
+   if(!RegistroPrenotaInvio(executionOrderId))
+   {
+      LogErrore(StringFormat("Ordine APRI %s: gia' preso in carico da un'altra copia dell'EA, oppure registro non scrivibile — apertura NON eseguita da questa copia.", executionOrderId));
+      return;
+   }
+
+   // Il riferimento dell'ordine viaggia nel commento della posizione.
+   bool successo;
+   if(direzione == "long")
+      successo = trade.Buy(volumeRichiesto, g_simboloBroker, 0.0, sl, tp, rif);
+   else
+      successo = trade.Sell(volumeRichiesto, g_simboloBroker, 0.0, sl, tp, rif);
+
    if(!successo)
    {
+      // v1.5.0: se MT5 non sa dire com'e' andata (tempo scaduto, connessione
+      // al broker caduta) l'esito e' in dubbio. Si guarda subito se la
+      // posizione esiste; se non c'e', NON si dichiara "non eseguito" e NON
+      // si ripete: resta in dubbio, e il server lo tiene in esito incerto.
+      uint codiceRitorno = trade.ResultRetcode();
+      if(codiceRitorno == TRADE_RETCODE_TIMEOUT || codiceRitorno == TRADE_RETCODE_CONNECTION || codiceRitorno == TRADE_RETCODE_ERROR)
+      {
+         ulong ticketDubbio = 0; double volumeDubbio = 0.0, prezzoDubbio = 0.0;
+         if(EsecuzioneGiaPresenteSuMt5(rif, ticketDubbio, volumeDubbio, prezzoDubbio))
+         {
+            LogOrdine(StringFormat("APRI %s: MT5 ha risposto in modo incerto ma la posizione esiste (ticket=%I64u). Riporto l'esecuzione.", executionOrderId, ticketDubbio));
+            InviaOrderResult(executionOrderId, "FILLED", IntegerToString(ticketDubbio), volumeDubbio, prezzoDubbio, "");
+            return;
+         }
+         RegistroScrivi(executionOrderId, REG_INCERTO);
+         LogErrore(StringFormat("APRI %s: esito in dubbio (codice MT5 %u) e nessuna posizione trovata. NON ripetuto, nessun esito dichiarato.", executionOrderId, codiceRitorno));
+         return;
+      }
       string descrizioneErrore = trade.ResultRetcodeDescription();
       LogErrore(StringFormat("Esecuzione APRI %s fallita (sl=%.*f tp=%.*f): %s", executionOrderId, cifre, sl, cifre, tp, descrizioneErrore));
       InviaOrderResult(executionOrderId, "ERROR", "", 0, 0, descrizioneErrore);
@@ -1209,6 +1714,16 @@ void EseguiOrdine(string oggettoJson)
    LogOrdine(StringFormat("Ricevuto ordine %s: tipo=%s direzione=%s livello=%.2f frazione=%.4f volume=%.2f sl=%.2f tp=%.2f ticketTarget=%I64u",
                            id, tipoOrdine, direzione, livelloRichiesto, frazioneRichiesta, volumeRichiesto, stopLoss, takeProfit, ticketMt5Target));
 
+   // v1.5.0: una chiusura o una modifica gia' eseguita non si riesegue (una
+   // chiusura parziale ripetuta chiuderebbe due volte). Il registro lo sa
+   // anche dopo un riavvio; l'eventuale esito in attesa viene ritrasmesso
+   // dal ciclo dedicato.
+   if(tipoOrdine != "APRI" && RegistroLeggi(id) == REG_ESEGUITO)
+   {
+      LogOrdine(StringFormat("Ordine %s (%s) gia' eseguito in precedenza: non ripetuto.", id, tipoOrdine));
+      return;
+   }
+
    if(tipoOrdine == "APRI")
       EseguiApri(id, direzione, volumeRichiesto, stopLoss, takeProfit);
    else if(tipoOrdine == "MODIFICA_SL")
@@ -1244,7 +1759,9 @@ void EseguiCicloPendingOrders()
    // ordini di deploy.
    string risposta;
    string url = ApiBaseUrl + "/api/mt5/pending-orders";
-   string headerRef = "X-DLM-Connection-Reference: " + ConnectionReference + "\r\n";
+   string headerRef = "X-DLM-Connection-Reference: " + ConnectionReference + "\r\n"
+                    + "X-DLM-EA-Version: " + EA_VERSIONE + "\r\n"
+                    + "X-DLM-EA-Protocol: " + IntegerToString(PROTOCOLLO_ESECUZIONE) + "\r\n";
    bool ok = EseguiChiamataHttp("GET", url, "", risposta, headerRef);
    if(!ok)
       return; // gia' loggato in EseguiChiamataHttp
@@ -1335,6 +1852,10 @@ int OnInit()
    InviaStatus(criticoIniziale, criticoIniziale ? descrizioneCriticaIniziale : "");
    g_erroreCriticoGiaRiportato = criticoIniziale;
 
+   // v1.5.0: ordini rimasti a meta' e esiti non consegnati prima del riavvio.
+   RecuperaOrdiniInDubbio(true);
+   RitrasmettiEsitiInAttesa();
+
    return(INIT_SUCCEEDED);
 }
 
@@ -1350,6 +1871,13 @@ void OnTimer()
 
    if(g_secondiTrascorsi % IntervalloPollingSecondi == 0)
       EseguiCicloPendingOrders();
+
+   // v1.5.0: esiti non ancora confermati dal server.
+   if(g_secondiTrascorsi % SECONDI_TRA_RITRASMISSIONI == 0)
+      RitrasmettiEsitiInAttesa();
+   // v1.5.0: un ordine rimasto in dubbio puo' comparire su MT5 piu' tardi.
+   if(g_secondiTrascorsi % IntervalloStatusSecondi == 0)
+      RecuperaOrdiniInDubbio(false);
 
    // BUG REALE TROVATO E CORRETTO (31/07/2026, test simulazione errore
    // critico): prima di questa versione l'heartbeat periodico sotto

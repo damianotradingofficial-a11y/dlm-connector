@@ -91,11 +91,11 @@ Test reale end-to-end su Windows (rilevamento → installazione → wizard → h
 
 ## Rilascio dalla 0.5.0
 
-- **Versione attuale: DLM Connector 0.5.0**, con **DLM Bridge EA 1.4.8** e indirizzo del server `https://www.dlmtrading.com`. Dettagli in `RELEASE_NOTES_0.5.0.md`.
+- **Versione in sviluppo: DLM Connector 0.6.0**, con **DLM Bridge EA 1.5.0** (protocollo di esecuzione 2) e indirizzo del server `https://www.dlmtrading.com`. Dettagli in `RELEASE_NOTES_0.6.0.md`. **Non pubblicata e non ancora provata su MetaTrader.** L'ultima versione di prova pubblicabile resta la 0.5.0 (EA 1.4.8), vedi `RELEASE_NOTES_0.5.0.md`.
 - **Controlli di rilascio:** `npm test` (nessuna dipendenza). Verificano EA incluso (versione e impronta), assenza del vecchio dominio, assenza di numeri di conto nei commenti, assenza della chiave di collegamento nei registri, versione allineata, pubblicazione di prova.
 - **Pubblicazione:** un tag `v*` costruisce il pacchetto Windows e lo pubblica come **versione di prova (prerelease)**, con `SHA256SUMS.txt`. Non diventa da sola la versione dei clienti.
 - **Produzione:** dopo l'approvazione, i link dell'app vanno puntati alla versione precisa, ad esempio
-  `https://github.com/damianotradingofficial-a11y/dlm-connector/releases/download/v0.5.0/DLM-Connector-Setup.exe`.
+  `https://github.com/damianotradingofficial-a11y/dlm-connector/releases/download/v0.6.0/DLM-Connector-Setup.exe`.
   **Non usare mai i link `releases/latest/download/…` in produzione:** distribuirebbero ai clienti qualunque versione futura, anche non approvata.
 - **Firma del codice:** per i clienti la firma Windows è obbligatoria. Le versioni di prova interne possono non essere firmate.
 - **macOS:** non ancora supportato (il Connector su Mac non installa il Bridge). Il lavoro `build-mac` del flusso è disattivato; serviranno firma Apple e notarizzazione.
