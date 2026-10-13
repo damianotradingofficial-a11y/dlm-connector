@@ -41,9 +41,10 @@ const MINUTI_HEARTBEAT_FRESCO = 10;
  *   locale?: { installazioniMt5?: object, processoMt5Attivo?: object }|null,
  *   remoto?: { account: object|null, heartbeat: object|null }|null,
  *   installazioneReport?: object|null,
+ *   statoInstallazione?: object|null,
  * }} input
  */
-function calcolaStatoWizard({ supportoPiattaforma = null, locale = null, remoto = null, installazioneReport = null } = {}) {
+function calcolaStatoWizard({ supportoPiattaforma = null, locale = null, remoto = null, installazioneReport = null, statoInstallazione = null } = {}) {
   const step = {};
 
   // --- Step 1: rilevamento sistema — sempre noto immediatamente ---
@@ -75,18 +76,47 @@ function calcolaStatoWizard({ supportoPiattaforma = null, locale = null, remoto 
   // --- Step 3: installazione Bridge ---
   if (step.rilevamento_mt5.stato !== "completato") {
     step.installazione_bridge = { stato: "non_disponibile", dettaglio: "Completa prima il rilevamento MT5." };
-  } else if (!installazioneReport) {
-    step.installazione_bridge = { stato: "in_attesa", dettaglio: "Premi \"Installa Bridge\" per procedere." };
-  } else if (installazioneReport.bridge?.stato === "installato_e_compilato") {
+  } else if (statoInstallazione && statoInstallazione.stato === "installato") {
+    // Stato letto dal disco in questo momento: vale anche dopo un riavvio del
+    // Connector o del computer, senza ricordare nulla.
+    const versione = statoInstallazione.versioneInstallata;
     step.installazione_bridge = {
       stato: "completato",
-      dettaglio: `Bridge installato e compilato (v${installazioneReport.bridge.versioneSorgenteCopiata}).`,
-      report: installazioneReport,
+      dettaglio: `Collegamento DLM installato (v${versione}).`,
+      report:
+        installazioneReport && installazioneReport.bridge?.stato === "installato_e_compilato"
+          ? installazioneReport
+          : {
+              messaggio: `Collegamento DLM installato: versione ${versione} presente e compilata nella cartella di MetaTrader 5.`,
+              azioniRichieste: [],
+              bridge: { stato: "installato_e_compilato", versioneSorgenteCopiata: versione, ex5Presente: true },
+            },
     };
-  } else {
+  } else if (installazioneReport && installazioneReport.bridge?.stato !== "installato_e_compilato") {
     step.installazione_bridge = {
       stato: "azione_richiesta",
       dettaglio: (installazioneReport.azioniRichieste && installazioneReport.azioniRichieste[0]) || "Verifica il report di installazione.",
+      report: installazioneReport,
+    };
+  } else if (statoInstallazione && statoInstallazione.stato === "da_riparare") {
+    step.installazione_bridge = {
+      stato: "azione_richiesta",
+      daRiparare: true,
+      dettaglio: statoInstallazione.motivi[0] || "Il collegamento va riparato.",
+      report: {
+        messaggio: "Il collegamento DLM va riparato: premi \"Ripara il collegamento\".",
+        azioniRichieste: statoInstallazione.motivi,
+        bridge: { stato: "da_riparare", versioneSorgenteCopiata: statoInstallazione.versioneInstallata, ex5Presente: null },
+      },
+    };
+  } else if (!installazioneReport) {
+    step.installazione_bridge = { stato: "in_attesa", dettaglio: "Premi \"Installa Bridge\" per procedere." };
+  } else {
+    // Senza una lettura dal disco (nessuna installazione scelta) vale l'esito
+    // dell'installazione appena fatta.
+    step.installazione_bridge = {
+      stato: "completato",
+      dettaglio: `Bridge installato e compilato (v${installazioneReport.bridge.versioneSorgenteCopiata}).`,
       report: installazioneReport,
     };
   }

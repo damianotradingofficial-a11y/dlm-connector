@@ -12,13 +12,15 @@
 // installBridge.js). Le uniche scritture sul PC del cliente restano quelle
 // esplicitamente elencate nel piano Blocco 2 (allowlist in installBridge.js).
 const { app, BrowserWindow, ipcMain } = require("electron");
+const fs = require("fs/promises");
 const path = require("path");
 const { execFile } = require("child_process");
 
 const { rilevaInstallazioniMt5, rilevaProcessoMt5InEsecuzione, rilevaSupportoPiattaforma } = require("./src/lib/detectMt5");
 const { accediCliente, leggiStatoRemoto, generaConnectionReference } = require("./src/lib/supabaseClient");
 const { calcolaDiagnosi } = require("./src/lib/diagnostics");
-const { installaBridge } = require("./src/lib/installBridge");
+const { installaBridge, verificaStatoInstallazione } = require("./src/lib/installBridge");
+const { scegliInstallazione } = require("./src/lib/sceltaInstallazione");
 const { calcolaStatoWizard } = require("./src/lib/wizardState");
 const { analizzaVersioni } = require("./src/lib/versionManager");
 const { arricchisciDiagnosi, formattaMessaggioAssistente } = require("./src/lib/aiTroubleshootingBase");
@@ -33,6 +35,25 @@ let autenticato = false; // flag locale — la sessione vera vive nel client Sup
 // ricalcolare lo stato completo senza dover reinstallare ogni volta.
 let installazioneSelezionata = null;
 let ultimoReportInstallazione = null;
+
+// L'unica cosa ricordata su disco è QUALE installazione il cliente ha scelto
+// (il percorso della cartella dati), nella cartella dei dati del Connector.
+// Lo stato del collegamento non viene mai ricordato: si rilegge dal disco.
+const fileScelta = () => path.join(app.getPath("userData"), "installazione-scelta.json");
+async function leggiSceltaSalvata() {
+  try {
+    return JSON.parse(await fs.readFile(fileScelta(), "utf8")).cartellaDati || null;
+  } catch {
+    return null;
+  }
+}
+async function salvaScelta(cartellaDati) {
+  try {
+    await fs.writeFile(fileScelta(), JSON.stringify({ cartellaDati }), "utf8");
+  } catch {
+    // Non poterla salvare non blocca nulla: verrà richiesta di nuovo.
+  }
+}
 
 function creaFinestra() {
   finestraPrincipale = new BrowserWindow({
@@ -106,6 +127,7 @@ ipcMain.handle("dlm:selezionaInstallazione", async (_evt, { indice }) => {
   const scelta = info.installazioni?.[indice];
   if (!scelta) return { ok: false, errore: "Indice installazione non valido." };
   installazioneSelezionata = scelta;
+  await salvaScelta(scelta.cartellaDati);
   // Cambiando installazione, l'eventuale report di una installazione
   // precedente non ha più senso: azzerato per evitare di mostrare uno stato
   // "installato" riferito alla cartella sbagliata.
@@ -190,11 +212,25 @@ ipcMain.handle("dlm:statoWizard", async () => {
     }
   }
 
+  // Installazione di riferimento: quella scelta in questa sessione se esiste
+  // ancora, altrimenti l'unica trovata, altrimenti quella scelta in passato.
+  const precedente = installazioneSelezionata;
+  installazioneSelezionata = scegliInstallazione({
+    installazioni: locale.installazioniMt5.installazioni || [],
+    selezionata: installazioneSelezionata,
+    cartellaSalvata: await leggiSceltaSalvata(),
+  });
+  if (precedente && (!installazioneSelezionata || installazioneSelezionata.cartellaDati !== precedente.cartellaDati)) {
+    ultimoReportInstallazione = null;
+  }
+  const statoInstallazione = installazioneSelezionata ? await verificaStatoInstallazione(installazioneSelezionata) : null;
+
   const wizard = calcolaStatoWizard({
     supportoPiattaforma,
     locale,
     remoto,
     installazioneReport: ultimoReportInstallazione,
+    statoInstallazione,
   });
 
   const diagnosi = calcolaDiagnosi({ locale, remoto });
@@ -208,6 +244,7 @@ ipcMain.handle("dlm:statoWizard", async () => {
     remoto,
     erroreRemoto,
     installazioneSelezionata,
+    statoInstallazione,
     wizard,
     diagnosi,
     diagnosiArricchita,

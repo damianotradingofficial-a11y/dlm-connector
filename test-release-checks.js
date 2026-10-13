@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CONTROLLI DI RILASCIO — DLM Connector 0.6.1 (13/10/2026).
+// CONTROLLI DI RILASCIO — DLM Connector 0.6.2 (13/10/2026).
 // Solo moduli Node builtin: si esegue con `npm test` su qualunque sistema,
 // senza `npm install`. Bloccano la costruzione del pacchetto se:
 //   - l'EA incluso non è la versione attesa, o non è il file approvato;
@@ -12,7 +12,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 // Valori attesi di QUESTA versione. Cambiano solo con una nuova versione approvata.
-const CONNECTOR_ATTESO = "0.6.1";
+const CONNECTOR_ATTESO = "0.6.2";
 const EA_ATTESO = "1.5.0";
 const EA_PROPERTY_ATTESA = "1.50";
 const SERVER_ATTESO = "https://www.dlmtrading.com";

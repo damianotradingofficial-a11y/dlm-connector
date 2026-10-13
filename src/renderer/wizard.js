@@ -165,7 +165,7 @@ function renderStep3(stato) {
   el("dettaglioStep3").textContent = window.DLM_COPY.testoStep("installazione_bridge", info, stato);
   const btn = el("btnInstallaBridge");
   btn.disabled = info.stato === "non_disponibile";
-  btn.textContent = info.stato === "completato" ? "Reinstalla il collegamento" : "Installa il collegamento";
+  btn.textContent = info.stato === "completato" ? "Reinstalla il collegamento" : info.daRiparare ? "Ripara il collegamento" : "Installa il collegamento";
   renderEsitoInstallazione(info.report);
 }
 

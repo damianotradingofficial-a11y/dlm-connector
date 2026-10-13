@@ -86,7 +86,7 @@
       case "in_attesa":
         return "Tutto pronto per installare il collegamento DLM.";
       case "completato":
-        return "Il collegamento DLM è installato e pronto.";
+        return "Collegamento DLM installato.";
       case "azione_richiesta":
         return "Il collegamento DLM non è ancora utilizzabile — il motivo è scritto qui sotto.";
       default:

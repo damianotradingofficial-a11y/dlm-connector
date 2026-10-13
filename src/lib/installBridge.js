@@ -21,6 +21,7 @@
 // Se in futuro un bug altrove nel codice provasse a scrivere altrove, questa
 // funzione lo blocca comunque.
 const fs = require("fs/promises");
+const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
@@ -160,6 +161,70 @@ function interpretaRegistroCompilazione(testo) {
   }
   const righeErrore = righe.filter((r) => /:\s*error\s/i.test(r)).slice(0, 5);
   return { errori, avvisi, righeErrore };
+}
+
+async function improntaFile(percorso) {
+  try {
+    return crypto.createHash("sha256").update(await fs.readFile(percorso)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stato REALE del collegamento per una installazione, letto dal disco in quel
+ * momento (sola lettura). Nessun ricordo di installazioni passate: serve a
+ * sapere, anche dopo un riavvio del Connector o del computer, se il
+ * collegamento c'è davvero ed è quello di questa versione.
+ *
+ *  - "installato"      MetaTrader presente, EA di questa versione nella cartella
+ *                       giusta, identica a quella inclusa, file compilato presente
+ *                       e non più vecchio della EA;
+ *  - "non_installato"  nessun file del collegamento;
+ *  - "da_riparare"     qualcosa manca o non corrisponde (con i motivi).
+ */
+async function verificaStatoInstallazione(installazione, percorsoSorgente = PERCORSO_SORGENTE_BUNDLATO) {
+  const { cartellaDati, percorsoEseguibile } = installazione || {};
+  const versioneAttesa = await leggiVersioneSorgente(percorsoSorgente);
+  const base = { stato: "non_installato", motivi: [], versioneAttesa, versioneInstallata: null, cartellaExperts: null };
+  if (!cartellaDati) return { ...base, stato: "da_riparare", motivi: ["Installazione di MetaTrader 5 non indicata."] };
+
+  const cartellaExperts = path.join(cartellaDati, "MQL5", "Experts");
+  const mq5 = path.join(cartellaExperts, NOME_MQ5);
+  const ex5 = path.join(cartellaExperts, NOME_EX5);
+  const motivi = [];
+
+  if (!(await fileEsiste(cartellaExperts))) motivi.push(`La cartella di MetaTrader 5 non c'è più: ${cartellaExperts}.`);
+  if (percorsoEseguibile && !(await fileEsiste(percorsoEseguibile))) motivi.push(`MetaTrader 5 non risulta più installato in ${path.dirname(percorsoEseguibile)}.`);
+
+  const mq5Presente = await fileEsiste(mq5);
+  const mtimeEx5 = await mtimeSeEsiste(ex5);
+  const mtimeMq5 = await mtimeSeEsiste(mq5);
+  const versioneInstallata = mq5Presente ? await leggiVersioneSorgente(mq5) : null;
+
+  if (!mq5Presente && mtimeEx5 == null && motivi.length === 0) {
+    return { ...base, cartellaExperts };
+  }
+  if (!mq5Presente) {
+    motivi.push(`Manca il file del collegamento (${NOME_MQ5}).`);
+  } else if (versioneInstallata !== versioneAttesa) {
+    motivi.push(`La versione installata è la ${versioneInstallata || "sconosciuta"}, questa versione del Connector installa la ${versioneAttesa}.`);
+  } else if ((await improntaFile(mq5)) !== (await improntaFile(percorsoSorgente))) {
+    motivi.push(`Il file del collegamento (${NOME_MQ5}) è diverso da quello incluso nel Connector.`);
+  }
+  if (mtimeEx5 == null) {
+    motivi.push(`Manca il file compilato (${NOME_EX5}).`);
+  } else if (mtimeMq5 != null && mtimeEx5 < mtimeMq5) {
+    motivi.push(`Il file compilato (${NOME_EX5}) è più vecchio del collegamento: non è stato ricompilato.`);
+  }
+
+  return {
+    stato: motivi.length === 0 ? "installato" : "da_riparare",
+    motivi,
+    versioneAttesa,
+    versioneInstallata,
+    cartellaExperts,
+  };
 }
 
 /**
@@ -347,6 +412,7 @@ function generaReportInstallazione({
 
 module.exports = {
   installaBridge,
+  verificaStatoInstallazione,
   generaReportInstallazione,
   // Esportate per i test isolati richiesti da Damiano (nessuna UI ancora).
   percorsoConsentito,
