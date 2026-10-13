@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CONTROLLI DI RILASCIO — DLM Connector 0.6.0 (12/10/2026).
+// CONTROLLI DI RILASCIO — DLM Connector 0.6.1 (13/10/2026).
 // Solo moduli Node builtin: si esegue con `npm test` su qualunque sistema,
 // senza `npm install`. Bloccano la costruzione del pacchetto se:
 //   - l'EA incluso non è la versione attesa, o non è il file approvato;
@@ -12,7 +12,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 // Valori attesi di QUESTA versione. Cambiano solo con una nuova versione approvata.
-const CONNECTOR_ATTESO = "0.6.0";
+const CONNECTOR_ATTESO = "0.6.1";
 const EA_ATTESO = "1.5.0";
 const EA_PROPERTY_ATTESA = "1.50";
 const SERVER_ATTESO = "https://www.dlmtrading.com";
@@ -81,6 +81,8 @@ verifica("dopo un aggiornamento il Connector dice al cliente di riaprire MetaTra
 console.log("6 — istruzioni al cliente");
 verifica("il wizard nomina l'indirizzo esatto da autorizzare in MetaTrader", leggi("src/renderer/wizard.html").includes(SERVER_ATTESO) && leggi("src/lib/diagnostics.js").includes(SERVER_ATTESO));
 
+verifica("nessun indirizzo locale o di collaudo nel pacchetto del cliente", testuali(NEL_PACCHETTO).filter((f) => !f.endsWith(".mq5")).filter((f) => /127\.0\.0\.1|localhost|BANCO-COLLAUDO/i.test(leggi(f))).length === 0, testuali(NEL_PACCHETTO).filter((f) => !f.endsWith(".mq5")).filter((f) => /127\.0\.0\.1|localhost|BANCO-COLLAUDO/i.test(leggi(f))).join(", "));
+
 console.log("6b — collegamento al server dentro il pacchetto");
 // Trovato nel collaudo del 12/10/2026: il file con l'indirizzo del server veniva
 // creato durante la costruzione ma non rientrava nell'elenco dei file da
@@ -96,7 +98,7 @@ verifica("il flusso esegue questi controlli prima di costruire", /npm test/.test
 verifica("il flusso pubblica le impronte SHA-256", /SHA256SUMS\.txt/.test(flusso) && /Get-FileHash|sha256sum|shasum/.test(flusso));
 verifica("Mac non ancora supportato: il flusso non costruisce il pacchetto Mac", /build-mac:[\s\S]*?\n\s+if:\s*\$\{\{\s*false\s*\}\}/.test(flusso) && !/needs:\s*build-mac/.test(flusso));
 verifica("nessun aggiornamento automatico dentro il Connector", !/electron-updater|autoUpdater/.test(sorgentiConnector.map(leggi).join("\n")) && !("electron-updater" in (pkg.dependencies || {})));
-verifica("le istruzioni di rilascio vietano i link 'latest' in produzione", /releases\/download\/v0\.6\.0\//.test(leggi("README.md")) && /non usare .*latest/i.test(leggi("README.md")));
+verifica("le istruzioni di rilascio vietano i link 'latest' in produzione", leggi("README.md").includes(`releases/download/v${CONNECTOR_ATTESO}/`) && /non usare .*latest/i.test(leggi("README.md")));
 
 console.log(`\nRISULTATO: ${ok} superati, ${ko} falliti`);
 process.exit(ko ? 1 : 0);

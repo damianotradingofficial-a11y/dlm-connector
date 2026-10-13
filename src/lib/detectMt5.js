@@ -19,6 +19,30 @@ const execFileAsync = promisify(execFile);
 
 const NOME_FILE_EA = ["DLM_Bridge_EA.ex5", "DLM_Bridge_EA.mq5"];
 
+/** Vero solo per le cartelle dati di un terminale (32 cifre esadecimali). */
+function cartellaDatiValida(nome) {
+  return /^[0-9A-Fa-f]{32}$/.test(String(nome || ""));
+}
+
+/**
+ * origin.txt contiene la cartella di installazione di MetaTrader. Per
+ * prudenza accetta anche il percorso completo di terminal64.exe.
+ */
+function cartellaInstallazioneDaOrigin(contenuto) {
+  const pulito = String(contenuto || "").replace(/^\uFEFF/, "").replace(/\0/g, "").trim().replace(/[\\/]+$/, "");
+  if (!pulito) return null;
+  return /\.exe$/i.test(pulito) ? pulito.replace(/[\\/][^\\/]+$/, "") : pulito;
+}
+
+async function esiste(percorso) {
+  try {
+    await fs.access(percorso);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Enumera le installazioni MT5 trovate su Windows, cercando in
  * %APPDATA%\MetaQuotes\Terminal\<hash> (una cartella per ogni
@@ -34,7 +58,15 @@ async function rilevaInstallazioniMt5() {
     };
   }
 
-  const cartellaMetaQuotes = path.join(process.env.APPDATA || "", "MetaQuotes", "Terminal");
+  return enumeraInstallazioni(path.join(process.env.APPDATA || "", "MetaQuotes", "Terminal"));
+}
+
+/**
+ * Elenca i terminali MetaTrader 5 realmente utilizzabili dentro la cartella
+ * MetaQuotes\Terminal indicata. Separata dal controllo della piattaforma per
+ * poterla provare su una cartella finta.
+ */
+async function enumeraInstallazioni(cartellaMetaQuotes) {
   let sottocartelle = [];
   try {
     const voci = await fs.readdir(cartellaMetaQuotes, { withFileTypes: true });
@@ -46,8 +78,12 @@ async function rilevaInstallazioniMt5() {
   }
 
   const installazioni = [];
-  for (const hash of sottocartelle) {
-    const percorsoTerminal = path.join(cartellaMetaQuotes, hash);
+  for (const nome of sottocartelle) {
+    // Solo le cartelle dati vere: MetaTrader le chiama con 32 cifre
+    // esadecimali. "Common", "Community", "Help" sono cartelle di servizio,
+    // non installazioni.
+    if (!cartellaDatiValida(nome)) continue;
+    const percorsoTerminal = path.join(cartellaMetaQuotes, nome);
     const percorsoExperts = path.join(percorsoTerminal, "MQL5", "Experts");
 
     let expertsEsiste = false;
@@ -59,21 +95,26 @@ async function rilevaInstallazioniMt5() {
     } catch {
       expertsEsiste = false;
     }
+    // Senza MQL5\Experts non è un MetaTrader 5 utilizzabile (mai avviato,
+    // oppure cartella di un MetaTrader 4).
+    if (!expertsEsiste) continue;
 
-    // origin.txt (se presente) contiene il percorso reale dell'eseguibile
-    // MT5 collegato a questa cartella dati — utile per capire quale
-    // installazione/broker corrisponde, best-effort (non tutte le versioni
-    // MT5 lo scrivono).
-    let percorsoEseguibile = null;
+    // origin.txt contiene la CARTELLA in cui MetaTrader è installato (non il
+    // file del programma). Da lì si ricavano il programma e il compilatore.
+    let contenutoOrigin = null;
     try {
-      const origin = await fs.readFile(path.join(percorsoTerminal, "origin.txt"), "utf16le");
-      percorsoEseguibile = origin.trim() || null;
+      contenutoOrigin = await fs.readFile(path.join(percorsoTerminal, "origin.txt"), "utf16le");
     } catch {
-      percorsoEseguibile = null;
+      contenutoOrigin = null;
     }
+    const cartellaInstallazione = cartellaInstallazioneDaOrigin(contenutoOrigin);
+    const percorsoEseguibile = cartellaInstallazione ? path.join(cartellaInstallazione, "terminal64.exe") : null;
+    // Un terminale disinstallato lascia la cartella dati: non va proposto.
+    if (!percorsoEseguibile || !(await esiste(percorsoEseguibile))) continue;
 
     installazioni.push({
       cartellaDati: percorsoTerminal,
+      cartellaInstallazione,
       percorsoEseguibile,
       mql5ExpertsTrovata: expertsEsiste,
       bridgeEaPresente: fileEaTrovati.length > 0,
@@ -142,4 +183,11 @@ function rilevaSupportoPiattaforma() {
   };
 }
 
-module.exports = { rilevaInstallazioniMt5, rilevaProcessoMt5InEsecuzione, rilevaSupportoPiattaforma };
+module.exports = {
+  rilevaInstallazioniMt5,
+  enumeraInstallazioni,
+  rilevaProcessoMt5InEsecuzione,
+  rilevaSupportoPiattaforma,
+  cartellaDatiValida,
+  cartellaInstallazioneDaOrigin,
+};

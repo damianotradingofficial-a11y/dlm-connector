@@ -166,6 +166,27 @@ function renderStep3(stato) {
   const btn = el("btnInstallaBridge");
   btn.disabled = info.stato === "non_disponibile";
   btn.textContent = info.stato === "completato" ? "Reinstalla il collegamento" : "Installa il collegamento";
+  renderEsitoInstallazione(info.report);
+}
+
+// Esito reale dell'ultima installazione: successo verificato oppure l'errore
+// così com'è. Il riquadro compare solo se c'è qualcosa da dire.
+function renderEsitoInstallazione(report) {
+  const box = el("esitoStep3");
+  box.innerHTML = "";
+  const righe = report ? [report.messaggio, ...(report.azioniRichieste || [])].filter((r) => r && String(r).trim()) : [];
+  if (righe.length === 0) {
+    box.classList.add("nascosto");
+    return;
+  }
+  const riuscita = report.bridge?.stato === "installato_e_compilato";
+  box.className = "esito-installazione " + (riuscita ? "ok" : "errore-reale");
+  righe.forEach((testo, i) => {
+    const riga = document.createElement("div");
+    riga.className = i === 0 ? "titolo-esito" : "riga-esito";
+    riga.textContent = (i === 0 ? (riuscita ? "✅ " : "⛔ ") : "") + testo;
+    box.appendChild(riga);
+  });
 }
 
 function renderStep4(stato) {
@@ -215,8 +236,9 @@ function renderStep5(stato) {
     lista.appendChild(li);
   }
   const pronto = info.stato === "completato";
-  el("bannerPronto").classList.toggle("nascosto", !pronto);
-  if (pronto) el("testoBannerPronto").textContent = window.DLM_COPY.testoStep5Pronto();
+  const testoPronto = pronto ? window.DLM_COPY.testoStep5Pronto() : "";
+  el("testoBannerPronto").textContent = testoPronto;
+  el("bannerPronto").classList.toggle("nascosto", !testoPronto);
 }
 
 async function renderVersioni(stato) {
@@ -255,7 +277,7 @@ async function renderVersioni(stato) {
 
     // Fase 4 — notifica "nuova versione Connector disponibile" (SOLO
     // notifica: nessun download/installazione automatica, come richiesto).
-    const nuovaVersione = v.connector?.aggiornamento === "nuova_versione_disponibile";
+    const nuovaVersione = v.connector?.aggiornamento === "nuova_versione_disponibile" && Boolean(v.connector.versioneDisponibile);
     el("bannerAggiornamentoConnector").classList.toggle("nascosto", !nuovaVersione);
     if (nuovaVersione) {
       el("testoAggiornamentoConnector").textContent =

@@ -88,7 +88,7 @@
       case "completato":
         return "Il collegamento DLM è installato e pronto.";
       case "azione_richiesta":
-        return "Il collegamento DLM ha bisogno di un piccolo intervento — trovi i dettagli qui sotto.";
+        return "Il collegamento DLM non è ancora utilizzabile — il motivo è scritto qui sotto.";
       default:
         return "";
     }

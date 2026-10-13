@@ -21,6 +21,7 @@
 // Se in futuro un bug altrove nel codice provasse a scrivere altrove, questa
 // funzione lo blocca comunque.
 const fs = require("fs/promises");
+const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
@@ -102,14 +103,63 @@ async function backupSeEsiste(cartellaExperts, nomeFile) {
 }
 
 /**
- * Cerca metaeditor64.exe nella stessa cartella di terminal64.exe (percorso
- * noto dal rilevamento Blocco 1, letto da origin.txt). Solo lettura/verifica
- * di esistenza — nessuna scrittura in questa cartella.
+ * Cerca metaeditor64.exe nella cartella in cui MetaTrader è installato.
+ * Accetta l'installazione rilevata (cartellaInstallazione / percorsoEseguibile)
+ * oppure, per compatibilità, un percorso: sia la cartella sia terminal64.exe.
+ * Solo verifica di esistenza — nessuna scrittura in questa cartella.
+ * Ritorna sempre dove ha cercato, così un esito negativo si può spiegare.
  */
-async function trovaMetaEditor(percorsoEseguibileTerminal) {
-  if (!percorsoEseguibileTerminal) return null;
-  const candidato = path.join(path.dirname(percorsoEseguibileTerminal), "metaeditor64.exe");
-  return (await fileEsiste(candidato)) ? candidato : null;
+async function cercaMetaEditor(installazioneOPercorso) {
+  const ins = typeof installazioneOPercorso === "string" ? { percorsoEseguibile: installazioneOPercorso } : installazioneOPercorso || {};
+  const cartelle = [];
+  const aggiungi = (c) => {
+    if (c && !cartelle.includes(c)) cartelle.push(c);
+  };
+  aggiungi(ins.cartellaInstallazione);
+  if (ins.percorsoEseguibile) {
+    // Se è il file del programma si guarda accanto; se è una cartella, dentro.
+    aggiungi(/\.exe$/i.test(ins.percorsoEseguibile) ? path.dirname(ins.percorsoEseguibile) : ins.percorsoEseguibile);
+  }
+  const cercatoIn = cartelle.map((c) => path.join(c, "metaeditor64.exe"));
+  for (const candidato of cercatoIn) {
+    if (await fileEsiste(candidato)) return { percorso: candidato, cercatoIn };
+  }
+  return { percorso: null, cercatoIn };
+}
+
+async function trovaMetaEditor(installazioneOPercorso) {
+  return (await cercaMetaEditor(installazioneOPercorso)).percorso;
+}
+
+/**
+ * Legge il registro scritto da MetaEditor (UTF-16) e ne ricava l'esito:
+ * numero di errori e di avvisi e le righe di errore, così come le scrive
+ * il compilatore. Se il registro manca o non è leggibile ritorna null.
+ */
+async function leggiEsitoCompilazione(percorsoLog) {
+  let testo;
+  try {
+    const grezzo = await fs.readFile(percorsoLog);
+    testo = grezzo.length >= 2 && grezzo[0] === 0xff && grezzo[1] === 0xfe ? grezzo.toString("utf16le") : grezzo.includes(0) ? grezzo.toString("utf16le") : grezzo.toString("utf8");
+  } catch {
+    return null;
+  }
+  return interpretaRegistroCompilazione(testo);
+}
+
+function interpretaRegistroCompilazione(testo) {
+  const righe = String(testo || "").replace(/^\uFEFF/, "").split(/\r?\n/).map((r) => r.trim()).filter(Boolean);
+  let errori = null;
+  let avvisi = null;
+  for (const r of righe) {
+    const m = r.match(/(\d+)\s+errors?,\s*(\d+)\s+warnings?/i);
+    if (m) {
+      errori = Number(m[1]);
+      avvisi = Number(m[2]);
+    }
+  }
+  const righeErrore = righe.filter((r) => /:\s*error\s/i.test(r)).slice(0, 5);
+  return { errori, avvisi, righeErrore };
 }
 
 /**
@@ -123,7 +173,7 @@ async function trovaMetaEditor(percorsoEseguibileTerminal) {
  * @returns {Promise<object>} report installazione, vedi generaReportInstallazione.
  */
 async function installaBridge(installazione) {
-  const { cartellaDati, percorsoEseguibile } = installazione || {};
+  const { cartellaDati } = installazione || {};
   if (!cartellaDati) {
     throw new Error("installaBridge richiede installazione.cartellaDati (percorso della cartella dati MT5 scelta).");
   }
@@ -145,36 +195,57 @@ async function installaBridge(installazione) {
   await scriviFileConsentito(PERCORSO_SORGENTE_BUNDLATO, destMq5, cartellaExperts);
   const versioneInstallata = await leggiVersioneSorgente(destMq5);
 
-  // 3) TENTATIVO COMPILAZIONE — solo se metaeditor64.exe è individuabile.
-  const percorsoMetaEditor = await trovaMetaEditor(percorsoEseguibile);
+  // 3) COMPILAZIONE — con il MetaEditor della stessa installazione scelta.
+  const ricerca = await cercaMetaEditor(installazione);
+  const percorsoMetaEditor = ricerca.percorso;
   const mtimeEx5PrimaDelTentativo = await mtimeSeEsiste(destEx5);
-  let esitoCompilazione = { tentata: false, eseguito: false, erroreEsecuzione: null };
+  let esitoCompilazione = { tentata: false, eseguito: false, erroreEsecuzione: null, errori: null, avvisi: null, righeErrore: [] };
 
   if (percorsoMetaEditor) {
-    const percorsoLog = path.join(cartellaExperts, "dlm_bridge_compile.log");
+    // Il registro va in una cartella temporanea: in MQL5\Experts il Connector
+    // scrive soltanto i due file del collegamento e i loro salvataggi.
+    const percorsoLog = path.join(os.tmpdir(), `dlm_bridge_compile_${Date.now()}.log`);
+    let erroreEsecuzione = null;
     try {
-      await execFileAsync(percorsoMetaEditor, [`/compile:${destMq5}`, `/log:${percorsoLog}`], { timeout: 30000 });
-      esitoCompilazione = { tentata: true, eseguito: true, erroreEsecuzione: null };
+      // MetaEditor vuole i percorsi tra virgolette dopo i due punti; il suo
+      // codice di uscita non indica l'esito (esce con 1 anche quando riesce).
+      await execFileAsync(percorsoMetaEditor, [`/compile:"${destMq5}"`, `/log:"${percorsoLog}"`], {
+        timeout: 90000,
+        // Riga di comando esatta, come da documentazione di MetaEditor:
+        // "…\metaeditor64.exe" /compile:"…" /log:"…"
+        argv0: `"${percorsoMetaEditor}"`,
+        windowsVerbatimArguments: true,
+        windowsHide: true,
+      });
     } catch (e) {
-      // Non trattato come fallimento definitivo: la verifica vera è sul
-      // filesystem, subito sotto.
-      esitoCompilazione = { tentata: true, eseguito: true, erroreEsecuzione: e.message };
+      if (e.killed || e.code === "ENOENT" || e.code === "EACCES" || e.code === "EPERM") erroreEsecuzione = e.message;
     }
+    const letto = await leggiEsitoCompilazione(percorsoLog);
+    await fs.unlink(percorsoLog).catch(() => {});
+    esitoCompilazione = {
+      tentata: true,
+      eseguito: true,
+      erroreEsecuzione,
+      errori: letto ? letto.errori : null,
+      avvisi: letto ? letto.avvisi : null,
+      righeErrore: letto ? letto.righeErrore : [],
+    };
   }
 
   // 4) VERIFICA REALE — mai assunta. Il .ex5 è considerato "compilato ora"
-  //    SOLO se esiste E la sua data è cambiata rispetto a prima del
-  //    tentativo (copre sia il caso "non esisteva prima" sia "esisteva ma
-  //    era vecchio").
+  //    SOLO se esiste, la sua data è cambiata rispetto a prima del tentativo
+  //    e il compilatore non ha segnalato errori.
   const mtimeEx5DopoIlTentativo = await mtimeSeEsiste(destEx5);
   const compilazioneRiuscita =
     esitoCompilazione.tentata &&
     mtimeEx5DopoIlTentativo != null &&
-    mtimeEx5DopoIlTentativo !== mtimeEx5PrimaDelTentativo;
+    mtimeEx5DopoIlTentativo !== mtimeEx5PrimaDelTentativo &&
+    !(esitoCompilazione.errori > 0);
 
   return generaReportInstallazione({
     cartellaExperts,
     percorsoMetaEditorTrovato: percorsoMetaEditor,
+    metaEditorCercatoIn: ricerca.cercatoIn,
     backupMq5,
     backupEx5,
     versioneInstallata,
@@ -193,6 +264,7 @@ async function installaBridge(installazione) {
 function generaReportInstallazione({
   cartellaExperts,
   percorsoMetaEditorTrovato,
+  metaEditorCercatoIn = [],
   backupMq5,
   backupEx5,
   versioneInstallata,
@@ -203,29 +275,33 @@ function generaReportInstallazione({
   const azioniRichieste = [];
   let statoBridge;
 
+  let messaggio;
+
   if (compilazioneRiuscita) {
     statoBridge = "installato_e_compilato";
-  } else if (ex5Presente && !esitoCompilazione.tentata) {
-    // .ex5 già presente da prima (magari da un'installazione manuale
-    // precedente) e non abbiamo tentato/potuto ricompilare — non è un
-    // fallimento, ma va segnalato con chiarezza cosa è successo davvero.
-    statoBridge = "sorgente_copiato_ex5_preesistente_non_verificato";
-    azioniRichieste.push(
-      "Il file .ex5 presente non è stato ricompilato ora: se non sei sicuro che corrisponda al nuovo sorgente copiato, apri MetaEditor e compila manualmente (F7) per sicurezza."
-    );
+    messaggio = `Collegamento DLM ${versioneInstallata || ""} installato e compilato. File compilato verificato.`.replace("  ", " ");
   } else if (!percorsoMetaEditorTrovato) {
     statoBridge = "sorgente_copiato_compilazione_non_disponibile";
+    const dove = metaEditorCercatoIn.length > 0 ? metaEditorCercatoIn.join(" ; ") : "cartella di installazione di MetaTrader 5 non determinata";
+    messaggio = "Compilatore di MetaTrader 5 non trovato: il collegamento DLM è stato copiato ma NON è utilizzabile.";
     azioniRichieste.push(
-      `MetaEditor non trovato accanto a terminal64.exe: apri MetaEditor manualmente, apri ${NOME_MQ5} da MQL5/Experts e compila con F7.`
+      `MetaEditor (metaeditor64.exe) non trovato. Cercato in: ${dove}. Controlla che MetaTrader 5 sia installato completamente, poi premi di nuovo "Installa il collegamento". Se il problema resta, contatta l'assistenza DLM.`
     );
   } else {
     statoBridge = "sorgente_copiato_compilazione_fallita";
-    azioniRichieste.push(
-      `Il tentativo di compilazione automatica non ha prodotto ${NOME_EX5}. Apri MetaEditor, apri ${NOME_MQ5} da MQL5/Experts e compila manualmente con F7 per vedere l'errore esatto.`
-    );
+    messaggio = "La compilazione del collegamento DLM non è riuscita: il collegamento NON è utilizzabile.";
     if (esitoCompilazione.erroreEsecuzione) {
-      azioniRichieste.push(`Dettaglio tecnico del tentativo automatico: ${esitoCompilazione.erroreEsecuzione}`);
+      azioniRichieste.push(`MetaEditor non è stato eseguito correttamente: ${esitoCompilazione.erroreEsecuzione}`);
+    } else if (esitoCompilazione.errori > 0) {
+      azioniRichieste.push(
+        `Il compilatore ha segnalato ${esitoCompilazione.errori} errore/i.${esitoCompilazione.righeErrore.length > 0 ? " " + esitoCompilazione.righeErrore.join(" | ") : ""}`
+      );
+    } else {
+      azioniRichieste.push(
+        `MetaEditor è stato eseguito (${percorsoMetaEditorTrovato}) ma il file ${NOME_EX5} non è stato creato in ${cartellaExperts}.`
+      );
     }
+    azioniRichieste.push('Premi di nuovo "Installa il collegamento". Se il problema resta, contatta l\'assistenza DLM riportando questo messaggio.');
   }
 
   if (backupMq5 || backupEx5) {
@@ -244,6 +320,7 @@ function generaReportInstallazione({
   return {
     cartellaExperts,
     statoMT5: "installazione_selezionata_valida",
+    messaggio,
     bridge: {
       stato: statoBridge,
       versioneSorgenteCopiata: versioneInstallata,
@@ -251,6 +328,10 @@ function generaReportInstallazione({
     },
     compilazione: {
       metaEditorTrovato: Boolean(percorsoMetaEditorTrovato),
+      percorsoMetaEditor: percorsoMetaEditorTrovato || null,
+      metaEditorCercatoIn,
+      errori: esitoCompilazione.errori ?? null,
+      avvisi: esitoCompilazione.avvisi ?? null,
       tentata: esitoCompilazione.tentata,
       riuscita: compilazioneRiuscita,
       erroreEsecuzione: esitoCompilazione.erroreEsecuzione,
@@ -271,6 +352,8 @@ module.exports = {
   percorsoConsentito,
   leggiVersioneSorgente,
   trovaMetaEditor,
+  cercaMetaEditor,
+  interpretaRegistroCompilazione,
   PERCORSO_SORGENTE_BUNDLATO,
   NOME_MQ5,
   NOME_EX5,

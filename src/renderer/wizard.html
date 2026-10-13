@@ -82,7 +82,14 @@
   button:disabled { opacity: 0.5; cursor: default; }
   .riga-azioni { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .errore { color: var(--bear); font-size: 13px; margin-top: 4px; }
-  .nascosto { display: none; }
+  /* !important: le classi dei riquadri definite più sotto impostano "display"
+     e altrimenti vincerebbero, lasciando visibile un riquadro vuoto. */
+  .nascosto { display: none !important; }
+  .esito-installazione { font-size: 13px; line-height: 1.5; margin-top: 10px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-alt); }
+  .esito-installazione.ok { border-color: var(--bull); color: var(--bull); }
+  .esito-installazione.errore-reale { border-color: var(--bear); }
+  .esito-installazione .titolo-esito { font-weight: 600; }
+  .esito-installazione .riga-esito { margin-top: 6px; color: var(--dim); word-break: break-word; }
 
   /* Barra progresso 5 step */
   .barra-step { display: flex; gap: 6px; margin-bottom: 20px; }
@@ -249,6 +256,7 @@
       <button id="btnInstallaBridge">Installa il collegamento</button>
       <span id="statoInstallazione" style="font-size:13px;color:var(--dim);"></span>
     </div>
+    <div class="esito-installazione nascosto" id="esitoStep3"></div>
   </div>
 
   <!-- Step 4: configurazione guidata -->
