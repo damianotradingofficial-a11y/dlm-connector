@@ -91,11 +91,17 @@ async function leggiUltimaVersioneDisponibileConnector() {
       // si ricade sul manifest locale sotto.
     }
   }
+  const manifest = await leggiManifest();
+  if (manifest?.connector) return { versione: manifest.connector, fonte: "locale" };
+  return { versione: null, fonte: "sconosciuto" };
+}
+
+/** Manifest locale bundlato. Ritorna null se assente o illeggibile: mai un'ipotesi. */
+async function leggiManifest() {
   try {
-    const manifest = JSON.parse(await fs.readFile(path.join(__dirname, "..", "..", "version-manifest.json"), "utf8"));
-    return { versione: manifest.connector || null, fonte: "locale" };
+    return JSON.parse(await fs.readFile(path.join(__dirname, "..", "..", "version-manifest.json"), "utf8"));
   } catch {
-    return { versione: null, fonte: "sconosciuto" };
+    return null;
   }
 }
 
@@ -118,12 +124,21 @@ async function analizzaVersioni({ cartellaDati = null, versioneRemotaHeartbeat =
     versioneInstallata = await leggiVersioneSorgente(percorsoInstallato);
   }
 
+  // 24/08/2026 — prima qui bastava "diverse" per dichiarare il bundle piu'
+  // recente. Non e' la stessa cosa: se il cliente avesse sul disco una
+  // versione PIU' NUOVA di quella bundlata (Connector vecchio, Bridge
+  // aggiornato a mano), il messaggio l'avrebbe invitato a "aggiornare"
+  // sovrascrivendo il file buono con uno vecchio. Ora il verso lo decide un
+  // confronto, non l'assenza di uguaglianza.
+  const cmpBundleInstallata = confrontaVersioni(versioneBundlata, versioneInstallata);
   const bundlataVsInstallata =
-    versioneBundlata == null || versioneInstallata == null
+    cmpBundleInstallata == null
       ? "sconosciuto"
-      : versioneBundlata === versioneInstallata
-        ? "allineate"
-        : "bundle_piu_recente_di_installata";
+      : cmpBundleInstallata > 0
+        ? "bundle_piu_recente_di_installata"
+        : cmpBundleInstallata < 0
+          ? "installata_piu_recente_di_bundle"
+          : "allineate";
 
   const installataVsEsecuzione =
     versioneInstallata == null || versioneRemotaHeartbeat == null
@@ -139,7 +154,31 @@ async function analizzaVersioni({ cartellaDati = null, versioneRemotaHeartbeat =
   const cmpConnector = confrontaVersioni(ultimaDisponibile.versione, versioneConnector);
   const connectorAggiornamento = cmpConnector == null ? "sconosciuto" : cmpConnector > 0 ? "nuova_versione_disponibile" : "aggiornato";
 
+  // COMPATIBILITA' — domanda diversa da "sono aggiornato?", e va tenuta
+  // separata. Un Bridge puo' essere indietro di una versione e funzionare
+  // benissimo; sotto bridgeMinimoRichiesto invece non e' vecchio, e' NON
+  // AFFIDABILE, e la differenza va detta al cliente in quei termini. Il
+  // confronto usa la versione IN ESECUZIONE (heartbeat), non quella su
+  // disco: e' l'unica che descrive cosa sta davvero girando adesso.
+  const manifest = await leggiManifest();
+  const bridgeMinimoRichiesto = manifest?.bridgeMinimoRichiesto || null;
+  const cmpCompatibilita = confrontaVersioni(versioneRemotaHeartbeat, bridgeMinimoRichiesto);
+  const compatibilitaBridge =
+    cmpCompatibilita == null ? "sconosciuto" : cmpCompatibilita < 0 ? "incompatibile" : "compatibile";
+
   const azioniRichieste = [];
+  // Per primo, sempre: se c'e' un'incompatibilita' e' l'unica cosa che conta
+  // davvero in quella lista.
+  if (compatibilitaBridge === "incompatibile") {
+    azioniRichieste.push(
+      `Il collegamento a MetaTrader in esecuzione (versione ${versioneRemotaHeartbeat}) e' troppo vecchio per operare in sicurezza: serve almeno la ${bridgeMinimoRichiesto}. Ripeti l'installazione guidata e riavvia MetaTrader prima di lasciare operare la tua AI.`
+    );
+  }
+  if (bundlataVsInstallata === "installata_piu_recente_di_bundle") {
+    azioniRichieste.push(
+      `Sul PC c'e' una versione del collegamento (${versioneInstallata}) piu' recente di quella inclusa in questo Connector (${versioneBundlata}). Non reinstallare: aggiorna prima DLM Connector, altrimenti torneresti indietro.`
+    );
+  }
   if (bundlataVsInstallata === "bundle_piu_recente_di_installata") {
     azioniRichieste.push(
       `Il Connector ha una versione del Bridge (${versioneBundlata}) più recente di quella installata sul PC (${versioneInstallata}). Esegui di nuovo l'installazione guidata per aggiornarla.`
@@ -161,7 +200,8 @@ async function analizzaVersioni({ cartellaDati = null, versioneRemotaHeartbeat =
     versioneBundlata,
     versioneInstallata,
     versioneRemotaHeartbeat,
-    confronto: { bundlataVsInstallata, installataVsEsecuzione },
+    bridgeMinimoRichiesto,
+    confronto: { bundlataVsInstallata, installataVsEsecuzione, compatibilitaBridge },
     // v2.0 — sotto-oggetto dedicato al Connector stesso, separato dal
     // confronto sui 3 valori del Bridge sopra (concetti diversi: qui parliamo
     // dell'app, non dell'Expert Advisor).
@@ -176,4 +216,10 @@ async function analizzaVersioni({ cartellaDati = null, versioneRemotaHeartbeat =
   };
 }
 
-module.exports = { analizzaVersioni, leggiVersioneConnector, leggiUltimaVersioneDisponibileConnector, confrontaVersioni };
+module.exports = {
+  analizzaVersioni,
+  leggiVersioneConnector,
+  leggiUltimaVersioneDisponibileConnector,
+  leggiManifest,
+  confrontaVersioni,
+};

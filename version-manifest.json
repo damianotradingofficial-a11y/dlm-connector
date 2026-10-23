@@ -1,6 +1,8 @@
 {
-  "_comment": "Manifest locale bundlato con il Connector, letto da versionManager.js quando nessun endpoint remoto (DLM_CONNECTOR_UPDATE_CHECK_URL) è configurato. Aggiornare manualmente il campo 'connector' a ogni release pubblicata, allineato a package.json/version. Finche' resta uguale alla versione corrente, il Connector non mostra alcuna notifica di aggiornamento.",
-  "connector": "0.6.2",
+  "_comment": "Manifest locale bundlato con il Connector, letto da versionManager.js quando nessun endpoint remoto (DLM_CONNECTOR_UPDATE_CHECK_URL) e' configurato. Va aggiornato a ogni release. Dalla 0.6.3 il controllo scripts/verifica-allineamento-bridge.js FALLISCE (prima del pacchetto e nella CI) se 'connector' non corrisponde a package.json/version, se 'bridgeEa' non corrisponde alla EA_VERSIONE dell'EA incluso, o se 'bridgeMinimoRichiesto' supera la versione inclusa.",
+  "connector": "0.6.3",
   "bridgeEa": "1.5.0",
-  "apiBaseUrl": "https://www.dlmtrading.com"
+  "apiBaseUrl": "https://www.dlmtrading.com",
+  "_comment_bridgeMinimoRichiesto": "Versione MINIMA dell'EA (il Bridge) IN ESECUZIONE che il Connector considera affidabile, letta dal segnale dell'EA, non dal file su disco. 1.5.0 dal 23/10/2026 (decisione di Damiano): il Connector 0.6.3 distribuisce solo l'EA 1.5.0 e il protocollo di esecuzione 2 parte dalla 1.5.0; le 1.4.x non hanno le sue protezioni (autorizzazione prima dell'apertura, registro, controllo dei doppioni) e la 1.4.2 nemmeno la correzione dei doppioni dell'11/09. Sotto questa versione il Connector chiede di ripetere l'installazione e riavviare MetaTrader. Riguarda SOLO il Connector: la regola del server (versione_minima_ea_aperture_reali) e' separata.",
+  "bridgeMinimoRichiesto": "1.5.0"
 }

@@ -63,6 +63,12 @@ jobs:
           }
           EOF
 
+      # Protezioni del ponte (24/08/2026, riportate nella 0.6.3): l'EA incluso deve essere quello validato, con versioni
+      # coerenti. In questo checkout il canonico dell'app (mt5-bridge/) non c'è: il confronto byte per byte lo fa
+      # l'impronta SHA-256 approvata in test-release-checks.js; qui girano tutti gli altri controlli della guardia.
+      - name: Verifica allineamento Bridge EA
+        run: npm run verifica:bridge -- --consenti-canonico-assente
+
       - run: npm run dist:mac -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,6 +97,11 @@ jobs:
 
       - name: Controlli di rilascio (EA, dominio, numero conto, chiave nei registri, versione)
         run: npm test
+
+      # Protezioni del ponte (24/08/2026, riportate nella 0.6.3). Passo esplicito: la costruzione senza tag usa
+      # "npx electron-builder", che non esegue gli script predist di package.json.
+      - name: Verifica allineamento Bridge EA
+        run: npm run verifica:bridge -- --consenti-canonico-assente
 
       - name: Costruisci e pubblica come versione di prova (solo da tag)
         if: startsWith(github.ref, 'refs/tags/v')

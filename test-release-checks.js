@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CONTROLLI DI RILASCIO — DLM Connector 0.6.2 (13/10/2026).
+// CONTROLLI DI RILASCIO — DLM Connector 0.6.3 (23/10/2026; 0.6.2 del 13/10/2026 + protezioni del ponte del 24/08).
 // Solo moduli Node builtin: si esegue con `npm test` su qualunque sistema,
 // senza `npm install`. Bloccano la costruzione del pacchetto se:
 //   - l'EA incluso non è la versione attesa, o non è il file approvato;
@@ -12,7 +12,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 // Valori attesi di QUESTA versione. Cambiano solo con una nuova versione approvata.
-const CONNECTOR_ATTESO = "0.6.2";
+const CONNECTOR_ATTESO = "0.6.3";
 const EA_ATTESO = "1.5.0";
 const EA_PROPERTY_ATTESA = "1.50";
 const SERVER_ATTESO = "https://www.dlmtrading.com";
@@ -99,6 +99,20 @@ verifica("il flusso pubblica le impronte SHA-256", /SHA256SUMS\.txt/.test(flusso
 verifica("Mac non ancora supportato: il flusso non costruisce il pacchetto Mac", /build-mac:[\s\S]*?\n\s+if:\s*\$\{\{\s*false\s*\}\}/.test(flusso) && !/needs:\s*build-mac/.test(flusso));
 verifica("nessun aggiornamento automatico dentro il Connector", !/electron-updater|autoUpdater/.test(sorgentiConnector.map(leggi).join("\n")) && !("electron-updater" in (pkg.dependencies || {})));
 verifica("le istruzioni di rilascio vietano i link 'latest' in produzione", leggi("README.md").includes(`releases/download/v${CONNECTOR_ATTESO}/`) && /non usare .*latest/i.test(leggi("README.md")));
+
+console.log("8 — protezioni del ponte (24/08/2026, riportate nella 0.6.3)");
+const confronta = (a, b) => { const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number); for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1; } return 0; };
+verifica("esiste la guardia di allineamento del Bridge", fs.existsSync(path.join(__dirname, "scripts/verifica-allineamento-bridge.js")));
+for (const s of ["predist", "predist:win", "predist:mac", "prepack"]) verifica(`${s} esegue la guardia prima di impacchettare`, /verifica-allineamento-bridge\.js/.test(pkg.scripts?.[s] || ""), String(pkg.scripts?.[s]));
+// solo le righe "run:" contano (i commenti del flusso possono nominare gli stessi comandi)
+const passi = flusso.split("\n").map((r, i) => ({ r: r.trim(), i })).filter((x) => x.r.startsWith("run:") || x.r.startsWith("- run:"));
+const riga = (cmd) => passi.filter((x) => x.r.includes(cmd)).map((x) => x.i);
+const guardie = riga("npm run verifica:bridge");
+verifica("la CI esegue la guardia in entrambi i job, prima di costruire", guardie.length === 2 && guardie[0] < Math.min(...riga("npm run dist:mac")) && guardie[1] < Math.min(...riga("npm run dist:win"), ...riga("npx electron-builder")) && guardie[1] > Math.max(...riga("npm run dist:mac")), JSON.stringify({ guardie, mac: riga("npm run dist:mac"), win: riga("npm run dist:win"), npx: riga("npx electron-builder") }));
+verifica("il manifest dichiara la versione minima del Bridge, non oltre quella inclusa", typeof manifest.bridgeMinimoRichiesto === "string" && confronta(manifest.bridgeMinimoRichiesto, manifest.bridgeEa) <= 0, String(manifest.bridgeMinimoRichiesto));
+const vm = leggi("src/lib/versionManager.js").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+verifica("la compatibilità del Bridge è valutata sulla versione IN ESECUZIONE (segnale), contro il minimo", /confrontaVersioni\(\s*versioneRemotaHeartbeat\s*,\s*bridgeMinimoRichiesto\s*\)/.test(vm) && /compatibilitaBridge/.test(vm));
+verifica("bundle e installata si confrontano per verso (mai sovrascrivere un EA più recente)", /installata_piu_recente_di_bundle/.test(vm) && /confrontaVersioni\(\s*versioneBundlata\s*,\s*versioneInstallata\s*\)/.test(vm));
 
 console.log(`\nRISULTATO: ${ok} superati, ${ko} falliti`);
 process.exit(ko ? 1 : 0);

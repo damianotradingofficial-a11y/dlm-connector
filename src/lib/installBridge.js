@@ -32,6 +32,11 @@ const NOME_MQ5 = "DLM_Bridge_EA.mq5";
 const NOME_EX5 = "DLM_Bridge_EA.ex5";
 const PATTERN_BACKUP = /^DLM_Bridge_EA\.(mq5|ex5)\.backup-[0-9TZ-]+$/;
 
+// ATTENZIONE — questo e' il file che finisce sul PC del cliente (riportato dalla linea 0.4.5 il 23/10/2026).
+// Il 24/08/2026 l'audit del ponte ha trovato che era rimasto alla v1.3.0 mentre il canonico era piu' avanti: il
+// Connector avrebbe installato un Bridge che ignora ticket_mt5_target. Ora l'allineamento e' verificato da
+// scripts/verifica-allineamento-bridge.js (prima del pacchetto e nella CI) e l'impronta dell'EA approvato da
+// test-release-checks.js: se le copie divergono, non si pubblica.
 const PERCORSO_SORGENTE_BUNDLATO = path.join(__dirname, "..", "..", "resources", NOME_MQ5);
 
 /**
